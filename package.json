@@ -1,0 +1,34 @@
+{
+  "name": "xtremeled-remap-export",
+  "productName": "XtremeLED Remap Export",
+  "version": "1.0.0",
+  "description": "Remap stageview renders naar LED output mappings (Resolume-compatible)",
+  "author": "XtremeLED",
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/run-tests.js",
+    "screenshot": "electron . --screenshot=/tmp/xre-screenshot.png"
+  },
+  "devDependencies": {
+    "electron": "^31.7.0"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "build": {
+    "appId": "nl.xtremeled.remapexport",
+    "productName": "XtremeLED Remap Export",
+    "mac": {
+      "category": "public.app-category.video",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ]
+  }
+}

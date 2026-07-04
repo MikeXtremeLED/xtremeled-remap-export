@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XmlState name="50x2m (100m2) P4.8 hanging [Jack's Racing Day]">
+    <versionInfo name="Resolume Arena" majorVersion="5" minorVersion="0" microVersion="0" revision="00000"/>
+    <ScreenSetup name="ScreenSetup">
+        <Params name="ScreenSetupParams"/>
+        <sizing>
+            <inputs>
+                <InputSize name="0:1" width="10400" height="416"/>
+            </inputs>
+        </sizing>
+        <screens>
+            <Screen name="Output #1" uniqueId="14150">
+                <Params name="Params">
+                    <Param name="Name" default="" value="Output #1"/>
+                    <Param name="Enabled" default="1" value="1"/>
+                    <Param name="Hidden" default="0" value="0"/>
+                </Params>
+                <Params name="Output">
+                    <ParamRange name="Opacity" default="1" value="1"><ValueRange name="defaultRange" min="0" max="1"/></ParamRange>
+                    <ParamRange name="Brightness" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                    <ParamRange name="Contrast" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                    <ParamRange name="Red" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                    <ParamRange name="Green" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                    <ParamRange name="Blue" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                </Params>
+                <layers>
+                    <Slice uniqueId="2150">
+                        <Params name="Common">
+                            <Param name="Name" default="Layer" value="50x2m P4.81"/>
+                            <Param name="Enabled" default="1" value="1"/>
+                        </Params>
+                        <Params name="Input">
+                            <ParamChoice name="Input Source" default="0:1" value="0:1" storeChoices="0"/>
+                            <Param name="Input Opacity" default="1" value="1"/>
+                            <Param name="Input Bypass/Solo" default="1" value="1"/>
+                            <Param name="SoftEdgeEnable" default="0" value="0"/>
+                        </Params>
+                        <Params name="Output">
+                            <Param name="Flip" default="0" value="0"/>
+                            <ParamRange name="Brightness" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Contrast" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Red" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Green" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Blue" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <Param name="Is Key" default="0" value="0"/>
+                            <Param name="Black BG" default="0" value="0"/>
+                            <ParamRange name="BRed" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                            <ParamRange name="BGreen" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                            <ParamRange name="BBlue" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                        </Params>
+                        <InputRect orientation="0">
+                            <v x="0" y="0"/>
+                            <v x="10400" y="0"/>
+                            <v x="10400" y="416"/>
+                            <v x="0" y="416"/>
+                        </InputRect>
+                        <OutputRect orientation="0">
+                            <v x="0" y="0"/>
+                            <v x="10400" y="0"/>
+                            <v x="10400" y="416"/>
+                            <v x="0" y="416"/>
+                        </OutputRect>
+                        <Warper>
+                            <Params name="Warper"><ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/></Params>
+                            <BezierWarper controlWidth="4" controlHeight="4">
+                                <vertices>
+                                    <v x="0" y="0"/>
+                                    <v x="3467" y="0"/>
+                                    <v x="6933" y="0"/>
+                                    <v x="10400" y="0"/>
+                                    <v x="0" y="139"/>
+                                    <v x="3467" y="139"/>
+                                    <v x="6933" y="139"/>
+                                    <v x="10400" y="139"/>
+                                    <v x="0" y="277"/>
+                                    <v x="3467" y="277"/>
+                                    <v x="6933" y="277"/>
+                                    <v x="10400" y="277"/>
+                                    <v x="0" y="416"/>
+                                    <v x="3467" y="416"/>
+                                    <v x="6933" y="416"/>
+                                    <v x="10400" y="416"/>
+                                </vertices>
+                            </BezierWarper>
+                            <Homography>
+                                <src>
+                                    <v x="0" y="0"/>
+                                    <v x="10400" y="0"/>
+                                    <v x="10400" y="416"/>
+                                    <v x="0" y="416"/>
+                                </src>
+                                <dst>
+                                    <v x="0" y="0"/>
+                                    <v x="10400" y="0"/>
+                                    <v x="10400" y="416"/>
+                                    <v x="0" y="416"/>
+                                </dst>
+                            </Homography>
+                        </Warper>
+                        <SliceMask>
+                            <Params name="Input Mask">
+                                <Param name="Name" default="Mask" value="Mask"/>
+                                <Param name="Enabled" default="1" value="1"/>
+                                <Param name="Invert" default="1" value="1"/>
+                            </Params>
+                            <ShapeObject>
+                                <Params name="Shape">
+                                    <ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+                                </Params>
+                                <Rect orientation="0">
+                                    <v x="0" y="0"/>
+                                    <v x="3744" y="0"/>
+                                    <v x="3744" y="416"/>
+                                    <v x="0" y="416"/>
+                                </Rect>
+                                <Shape>
+                                    <Contour closed="1">
+                                        <points>
+                                            <v x="0" y="0"/>
+                                            <v x="0" y="416"/>
+                                            <v x="3744" y="416"/>
+                                            <v x="3744" y="0"/>
+                                        </points>
+                                        <segments>LLLL</segments>
+                                    </Contour>
+                                </Shape>
+                            </ShapeObject>
+                        </SliceMask>
+                    </Slice>
+                    <Slice uniqueId="4150">
+                        <Params name="Common">
+                            <Param name="Name" default="Layer" value="50x2m P4.81"/>
+                            <Param name="Enabled" default="1" value="1"/>
+                        </Params>
+                        <Params name="Input">
+                            <ParamChoice name="Input Source" default="0:1" value="0:1" storeChoices="0"/>
+                            <Param name="Input Opacity" default="1" value="1"/>
+                            <Param name="Input Bypass/Solo" default="1" value="1"/>
+                            <Param name="SoftEdgeEnable" default="0" value="0"/>
+                        </Params>
+                        <Params name="Output">
+                            <Param name="Flip" default="0" value="0"/>
+                            <ParamRange name="Brightness" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Contrast" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Red" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Green" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Blue" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <Param name="Is Key" default="0" value="0"/>
+                            <Param name="Black BG" default="0" value="0"/>
+                            <ParamRange name="BRed" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                            <ParamRange name="BGreen" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                            <ParamRange name="BBlue" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                        </Params>
+                        <InputRect orientation="0">
+                            <v x="0" y="0"/>
+                            <v x="10400" y="0"/>
+                            <v x="10400" y="416"/>
+                            <v x="0" y="416"/>
+                        </InputRect>
+                        <OutputRect orientation="0">
+                            <v x="-3744" y="416"/>
+                            <v x="6656" y="416"/>
+                            <v x="6656" y="832"/>
+                            <v x="-3744" y="832"/>
+                        </OutputRect>
+                        <Warper>
+                            <Params name="Warper"><ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/></Params>
+                            <BezierWarper controlWidth="4" controlHeight="4">
+                                <vertices>
+                                    <v x="-3744" y="416"/>
+                                    <v x="-277" y="416"/>
+                                    <v x="3189" y="416"/>
+                                    <v x="6656" y="416"/>
+                                    <v x="-3744" y="555"/>
+                                    <v x="-277" y="555"/>
+                                    <v x="3189" y="555"/>
+                                    <v x="6656" y="555"/>
+                                    <v x="-3744" y="693"/>
+                                    <v x="-277" y="693"/>
+                                    <v x="3189" y="693"/>
+                                    <v x="6656" y="693"/>
+                                    <v x="-3744" y="832"/>
+                                    <v x="-277" y="832"/>
+                                    <v x="3189" y="832"/>
+                                    <v x="6656" y="832"/>
+                                </vertices>
+                            </BezierWarper>
+                            <Homography>
+                                <src>
+                                    <v x="-3744" y="416"/>
+                                    <v x="6656" y="416"/>
+                                    <v x="6656" y="832"/>
+                                    <v x="-3744" y="832"/>
+                                </src>
+                                <dst>
+                                    <v x="-3744" y="416"/>
+                                    <v x="6656" y="416"/>
+                                    <v x="6656" y="832"/>
+                                    <v x="-3744" y="832"/>
+                                </dst>
+                            </Homography>
+                        </Warper>
+                        <SliceMask>
+                            <Params name="Input Mask">
+                                <Param name="Name" default="Mask" value="Mask"/>
+                                <Param name="Enabled" default="1" value="1"/>
+                                <Param name="Invert" default="1" value="1"/>
+                            </Params>
+                            <ShapeObject>
+                                <Params name="Shape">
+                                    <ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+                                </Params>
+                                <Rect orientation="0">
+                                    <v x="3744" y="0"/>
+                                    <v x="7488" y="0"/>
+                                    <v x="7488" y="416"/>
+                                    <v x="3744" y="416"/>
+                                </Rect>
+                                <Shape>
+                                    <Contour closed="1">
+                                        <points>
+                                            <v x="3744" y="0"/>
+                                            <v x="3744" y="416"/>
+                                            <v x="7488" y="416"/>
+                                            <v x="7488" y="0"/>
+                                        </points>
+                                        <segments>LLLL</segments>
+                                    </Contour>
+                                </Shape>
+                            </ShapeObject>
+                        </SliceMask>
+                    </Slice>
+                    <Slice uniqueId="6150">
+                        <Params name="Common">
+                            <Param name="Name" default="Layer" value="50x2m P4.81"/>
+                            <Param name="Enabled" default="1" value="1"/>
+                        </Params>
+                        <Params name="Input">
+                            <ParamChoice name="Input Source" default="0:1" value="0:1" storeChoices="0"/>
+                            <Param name="Input Opacity" default="1" value="1"/>
+                            <Param name="Input Bypass/Solo" default="1" value="1"/>
+                            <Param name="SoftEdgeEnable" default="0" value="0"/>
+                        </Params>
+                        <Params name="Output">
+                            <Param name="Flip" default="0" value="0"/>
+                            <ParamRange name="Brightness" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Contrast" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Red" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Green" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <ParamRange name="Blue" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>
+                            <Param name="Is Key" default="0" value="0"/>
+                            <Param name="Black BG" default="0" value="0"/>
+                            <ParamRange name="BRed" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                            <ParamRange name="BGreen" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                            <ParamRange name="BBlue" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>
+                        </Params>
+                        <InputRect orientation="0">
+                            <v x="0" y="0"/>
+                            <v x="10400" y="0"/>
+                            <v x="10400" y="416"/>
+                            <v x="0" y="416"/>
+                        </InputRect>
+                        <OutputRect orientation="0">
+                            <v x="-7488" y="832"/>
+                            <v x="2912" y="832"/>
+                            <v x="2912" y="1248"/>
+                            <v x="-7488" y="1248"/>
+                        </OutputRect>
+                        <Warper>
+                            <Params name="Warper"><ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/></Params>
+                            <BezierWarper controlWidth="4" controlHeight="4">
+                                <vertices>
+                                    <v x="-7488" y="832"/>
+                                    <v x="-4021" y="832"/>
+                                    <v x="-555" y="832"/>
+                                    <v x="2912" y="832"/>
+                                    <v x="-7488" y="971"/>
+                                    <v x="-4021" y="971"/>
+                                    <v x="-555" y="971"/>
+                                    <v x="2912" y="971"/>
+                                    <v x="-7488" y="1109"/>
+                                    <v x="-4021" y="1109"/>
+                                    <v x="-555" y="1109"/>
+                                    <v x="2912" y="1109"/>
+                                    <v x="-7488" y="1248"/>
+                                    <v x="-4021" y="1248"/>
+                                    <v x="-555" y="1248"/>
+                                    <v x="2912" y="1248"/>
+                                </vertices>
+                            </BezierWarper>
+                            <Homography>
+                                <src>
+                                    <v x="-7488" y="832"/>
+                                    <v x="2912" y="832"/>
+                                    <v x="2912" y="1248"/>
+                                    <v x="-7488" y="1248"/>
+                                </src>
+                                <dst>
+                                    <v x="-7488" y="832"/>
+                                    <v x="2912" y="832"/>
+                                    <v x="2912" y="1248"/>
+                                    <v x="-7488" y="1248"/>
+                                </dst>
+                            </Homography>
+                        </Warper>
+                        <SliceMask>
+                            <Params name="Input Mask">
+                                <Param name="Name" default="Mask" value="Mask"/>
+                                <Param name="Enabled" default="1" value="1"/>
+                                <Param name="Invert" default="1" value="1"/>
+                            </Params>
+                            <ShapeObject>
+                                <Params name="Shape">
+                                    <ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+                                </Params>
+                                <Rect orientation="0">
+                                    <v x="7488" y="0"/>
+                                    <v x="10400" y="0"/>
+                                    <v x="10400" y="416"/>
+                                    <v x="7488" y="416"/>
+                                </Rect>
+                                <Shape>
+                                    <Contour closed="1">
+                                        <points>
+                                            <v x="7488" y="0"/>
+                                            <v x="7488" y="416"/>
+                                            <v x="10400" y="416"/>
+                                            <v x="10400" y="0"/>
+                                        </points>
+                                        <segments>LLLL</segments>
+                                    </Contour>
+                                </Shape>
+                            </ShapeObject>
+                        </SliceMask>
+                    </Slice>
+                </layers>
+                <OutputDevice>
+                    <OutputDeviceVirtual name="Virtual" deviceId="Virtual" idHash="0" width="3840" height="2160">
+                        <Params name="Params">
+                            <ParamRange name="Width" default="1920" value="3840"><ValueRange name="defaultRange" min="1" max="32768"/></ParamRange>
+                            <ParamRange name="Height" default="1080" value="2160"><ValueRange name="defaultRange" min="1" max="32768"/></ParamRange>
+                        </Params>
+                    </OutputDeviceVirtual>
+                </OutputDevice>
+            </Screen>
+        </screens>
+        <SoftEdging>
+            <Params name="Soft Edge">
+                <ParamRange name="Gamma Red" default="2" value="2"><ValueRange name="defaultRange" min="1" max="3"/></ParamRange>
+                <ParamRange name="Gamma Green" default="2" value="2"><ValueRange name="defaultRange" min="1" max="3"/></ParamRange>
+                <ParamRange name="Gamma Blue" default="2" value="2"><ValueRange name="defaultRange" min="1" max="3"/></ParamRange>
+                <ParamRange name="Gamma" default="1" value="1"><ValueRange name="defaultRange" min="0" max="1"/></ParamRange>
+                <ParamRange name="Luminance" default="0.5" value="0.5"><ValueRange name="defaultRange" min="0" max="1"/></ParamRange>
+                <ParamRange name="Power" default="2" value="2"><ValueRange name="defaultRange" min="0.10000000000000001" max="7"/></ParamRange>
+            </Params>
+        </SoftEdging>
+    </ScreenSetup>
+</XmlState>
