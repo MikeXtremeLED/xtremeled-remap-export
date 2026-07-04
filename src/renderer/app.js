@@ -792,8 +792,10 @@ function openRenderModal(prefill) {
         <div class="radio-row">
           <label><input type="radio" name="r-codec" value="prores" checked /> Apple ProRes 422 HQ</label>
           <label><input type="radio" name="r-codec" value="dxv" ${dxvDisabled} /> DXV3</label>
+          <label><input type="radio" name="r-codec" value="png" /> PNG (still)</label>
         </div>
         ${dxvNote}
+        <div class="note">PNG exporteert één remapped beeld (handig voor PowerPoint); bij video wordt het eerste frame gebruikt.</div>
         <div class="row">
           <label style="min-width:130px">FPS (voor foto's)</label>
           <input type="number" id="r-fps" class="num" style="width:70px" value="50" min="1" max="240" />
@@ -855,11 +857,12 @@ async function startRender() {
   const imageDuration = clampInt($('r-dur').value, 1, 3600);
   const OW = project.output.width, OH = project.output.height;
 
+  const outExt = codec === 'png' ? 'png' : 'mov';
   const jobs = [];
   for (const src of renderUI.files) {
     const pp = await api.pathParse(src);
     const dest = renderUI.destDir || pp.dir;
-    const outPath = await api.pathJoin(dest, `${pp.base}_remap_${OW}x${OH}.mov`);
+    const outPath = await api.pathJoin(dest, `${pp.base}_remap_${OW}x${OH}.${outExt}`);
     jobs.push({ src, isImage: isImagePath(src), outPath });
   }
 

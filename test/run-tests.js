@@ -80,7 +80,32 @@ assert(/3840x2160/.test(info), 'output is 3840x2160:\n' + info);
 assert(/prores/i.test(info), 'output is prores:\n' + info);
 ok('output .mov is 3840x2160 ProRes');
 
+// ---------- 4) DXV3 render ----------
+console.log('Test 4: ffmpeg render (DXV3)');
+assert(caps.hasDxv, 'ffmpeg met dxv-encoder gevonden (bin/ffmpeg-dxv)');
+const outDxv = path.join(tmp, 'xre-test-out-dxv.mov');
+const dxvBuild = render.buildArgs(p, { src: srcPng, isImage: true, outPath: outDxv }, { codec: 'dxv', fps: 10, imageDuration: 1 }, null);
+const runDxv = spawnSync(caps.dxvPath, dxvBuild.args, { encoding: 'utf8', timeout: 120000 });
+assert.strictEqual(runDxv.status, 0, 'dxv render:\n' + (runDxv.stderr || '').slice(-2000));
+const probeDxv = spawnSync(caps.dxvPath, ['-hide_banner', '-i', outDxv], { encoding: 'utf8', timeout: 30000 });
+const infoDxv = (probeDxv.stderr || '') + (probeDxv.stdout || '');
+assert(/dxv/i.test(infoDxv) && /3840x2160/.test(infoDxv), 'output is 3840x2160 DXV:\n' + infoDxv);
+ok('output .mov is 3840x2160 DXV3');
+
+// ---------- 5) PNG still export ----------
+console.log('Test 5: PNG still export');
+const outPng = path.join(tmp, 'xre-test-out.png');
+const pngBuild = render.buildArgs(p, { src: srcPng, isImage: true, outPath: outPng }, { codec: 'png' }, null);
+const runPng = spawnSync(caps.proresPath, pngBuild.args, { encoding: 'utf8', timeout: 120000 });
+assert.strictEqual(runPng.status, 0, 'png render:\n' + (runPng.stderr || '').slice(-2000));
+const probePng = spawnSync(caps.proresPath, ['-hide_banner', '-i', outPng], { encoding: 'utf8', timeout: 30000 });
+const infoPng = (probePng.stderr || '') + (probePng.stdout || '');
+assert(/png/i.test(infoPng) && /3840x2160/.test(infoPng), 'output is 3840x2160 PNG:\n' + infoPng);
+ok('output .png is 3840x2160');
+
 fs.unlinkSync(srcPng);
 fs.unlinkSync(outMov);
+fs.unlinkSync(outDxv);
+fs.unlinkSync(outPng);
 
 console.log(`\nALLE ${passed} CHECKS GESLAAGD`);

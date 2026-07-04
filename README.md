@@ -23,9 +23,10 @@ npm start          # of dubbelklik "XtremeLED Remap Export.command"
 - **Export XML** — sla je mapping op als Resolume-compatible XML.
 - **Auto-split** — verdeel een lange slice (bijv. 50m×1m scherm) automatisch over meerdere rijen op de output canvas.
 - **Reference image** — laad een stageview afbeelding als onderlaag in de Input Map; de Output Map toont live een preview van hoe de content gemapt wordt.
-- **Render** — batch-render naar `.mov`:
-  - **Apple ProRes 422 HQ** (werkt altijd, via meegeleverde ffmpeg)
-  - **DXV3** (vereist ffmpeg 7.1+ met dxv-encoder: `brew install ffmpeg`)
+- **Render** — batch-render:
+  - **Apple ProRes 422 HQ** (.mov)
+  - **DXV3** (.mov) — via de meegeleverde ffmpeg 8 in `bin/ffmpeg-dxv/`
+  - **PNG (still)** — één remapped beeld, bijv. om via PowerPoint af te spelen; bij een video wordt het eerste frame gebruikt.
   - Foto's worden 1 seconde video (duur en fps instelbaar, standaard 50 fps).
   - Audio van videobronnen wordt meegenomen (PCM).
 - **Project opslaan/openen** (`.xreproj`), automatische sessie-herstel, drag & drop van XML/afbeeldingen/video's.
@@ -57,5 +58,5 @@ Voor Windows later: `npx electron-builder --win` (op een Windows machine of met 
 ## Opmerkingen
 
 - De bron wordt geschaald naar het input canvas — zorg dat je stageview render dezelfde verhouding heeft als je input canvas.
-- DXV3 via ffmpeg gebruikt DXT1 (DXV "Normal Quality"); Resolume speelt dit direct af. Voor maximale kwaliteit is ProRes HQ de betere keuze.
+- DXV3 via ffmpeg gebruikt DXT1 (DXV "Normal Quality", geen alpha); Resolume speelt dit direct af. Voor maximale kwaliteit is ProRes HQ de betere keuze.
 - Output-canvasafmetingen worden bij het renderen op even getallen afgerond (ProRes 4:2:2 vereiste).

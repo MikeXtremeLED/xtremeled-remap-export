@@ -3,6 +3,7 @@
 // ProRes 422 HQ via prores_ks; DXV3 via de ffmpeg 'dxv' encoder (ffmpeg 7.1+, bv. Homebrew).
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 
 let ffmpegStatic = null;
 try {
@@ -11,6 +12,9 @@ try {
   /* optioneel */
 }
 
+// Meegeleverde ffmpeg 8.x met DXV-encoder (bin/ffmpeg-dxv/ffmpeg)
+const bundledDxvFfmpeg = path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv', 'ffmpeg');
+
 let currentProc = null;
 let cancelled = false;
 let capsCache = null;
@@ -18,6 +22,7 @@ let capsCache = null;
 function candidateFfmpegs() {
   const list = [];
   if (process.env.XRE_FFMPEG) list.push(process.env.XRE_FFMPEG);
+  list.push(bundledDxvFfmpeg.replace('app.asar', 'app.asar.unpacked'));
   if (ffmpegStatic) list.push(ffmpegStatic);
   list.push('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg');
   return [...new Set(list)].filter((p) => {
@@ -120,8 +125,9 @@ function buildArgs(project, job, opts, probe) {
   const sl = effectiveSlices(project);
   if (!sl.length) throw new Error('Geen actieve slices binnen de input canvas');
 
-  const fps = job.isImage ? opts.fps || 50 : (probe && probe.fps) || 25;
-  const dur = job.isImage ? opts.imageDuration || 1 : null;
+  const isPng = opts.codec === 'png';
+  const fps = job.isImage || isPng ? opts.fps || 50 : (probe && probe.fps) || 25;
+  const dur = job.isImage && !isPng ? opts.imageDuration || 1 : null;
 
   const parts = [];
   parts.push(`[0:v]scale=${IW}:${IH}:flags=bicubic,setsar=1[src]`);
@@ -144,21 +150,26 @@ function buildArgs(project, job, opts, probe) {
     prev = outLabel;
   });
 
-  const inputArgs = job.isImage ? ['-loop', '1', '-t', String(dur), '-i', job.src] : ['-i', job.src];
-  const codecArgs =
-    opts.codec === 'dxv'
-      ? ['-c:v', 'dxv']
-      : [
-          '-c:v', 'prores_ks',
-          '-profile:v', '3',
-          '-vendor', 'apl0',
-          '-pix_fmt', 'yuv422p10le',
-          '-color_primaries', 'bt709',
-          '-color_trc', 'bt709',
-          '-colorspace', 'bt709',
-        ];
+  const inputArgs =
+    job.isImage && !isPng ? ['-loop', '1', '-t', String(dur), '-i', job.src] : ['-i', job.src];
+  let codecArgs;
+  if (isPng) {
+    codecArgs = ['-frames:v', '1']; // png encoder volgt uit .png extensie
+  } else if (opts.codec === 'dxv') {
+    codecArgs = ['-c:v', 'dxv', '-pix_fmt', 'rgba'];
+  } else {
+    codecArgs = [
+      '-c:v', 'prores_ks',
+      '-profile:v', '3',
+      '-vendor', 'apl0',
+      '-pix_fmt', 'yuv422p10le',
+      '-color_primaries', 'bt709',
+      '-color_trc', 'bt709',
+      '-colorspace', 'bt709',
+    ];
+  }
   const audioArgs =
-    !job.isImage && probe && probe.hasAudio ? ['-map', '0:a:0', '-c:a', 'pcm_s16le'] : [];
+    !isPng && !job.isImage && probe && probe.hasAudio ? ['-map', '0:a:0', '-c:a', 'pcm_s16le'] : [];
 
   const args = [
     '-y',
@@ -168,12 +179,12 @@ function buildArgs(project, job, opts, probe) {
     '-map', '[out]',
     ...audioArgs,
     ...codecArgs,
-    ...(job.isImage ? ['-r', String(fps)] : []),
+    ...(job.isImage && !isPng ? ['-r', String(fps)] : []),
     '-progress', 'pipe:1',
     '-nostats',
     job.outPath,
   ];
-  return { args, durationSec: job.isImage ? dur : probe && probe.durationSec };
+  return { args, durationSec: isPng ? null : job.isImage ? dur : probe && probe.durationSec };
 }
 
 function runFfmpeg(ffPath, args, durationSec, onProgress) {
