@@ -76,10 +76,10 @@
             <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
           </div>
           <div class="subtitle">Screens (outputs)</div>
+          <div class="row"><select id="p-screen-select" style="flex:1"></select></div>
           <div class="row">
-            <select id="p-screen-select" style="flex:1"></select>
-            <button id="p-screen-add" title="Add screen">+</button>
-            <button id="p-screen-del" class="danger" title="Delete screen">✕</button>
+            <button id="p-screen-add" style="flex:1">+ Add screen</button>
+            <button id="p-screen-del" class="danger" title="Delete selected screen">Delete</button>
           </div>
           <div class="row"><label>Name</label><input type="text" id="scr-name" /></div>
           <div class="row2">
@@ -203,14 +203,17 @@
           <div class="tl-row">
             <span id="tl-cur" class="tc">00:00:00.00</span>
             <button id="rp-refresh" title="Refresh preview frame">⟳</button>
+            <input type="number" id="tl-in-n" class="num tc-num" step="0.01" min="0" placeholder="in" title="In point (s) — type for precision" />
             <button id="rp-set-in" title="Set in point at playhead (I)">[</button>
             <div id="tl-track">
+              <canvas id="tl-wave"></canvas>
               <div id="tl-sel"></div>
               <div id="tl-in-h" class="tl-h in" title="In point — drag to move"></div>
               <div id="tl-out-h" class="tl-h out" title="Out point — drag to move"></div>
               <div id="tl-play"></div>
             </div>
             <button id="rp-set-out" title="Set out point at playhead (O)">]</button>
+            <input type="number" id="tl-out-n" class="num tc-num" step="0.01" min="0" placeholder="out" title="Out point (s) — type for precision" />
             <button id="rp-clear-trim" title="Clear in/out points">✕</button>
             <span id="tl-len" class="tc dim">—</span>
           </div>
@@ -244,6 +247,13 @@
             <label>Scale H</label>
             <input type="range" id="ct-scaley" min="1" max="400" value="100" data-default="100" />
             <input type="number" id="ct-scaley-n" class="num" value="100" /><span class="dim">%</span>
+          </div>
+          <div class="row2">
+            <label style="width:56px">Size</label>
+            <input type="number" id="ct-px-w" class="num" style="width:72px" title="Clip width in pixels — type to set exact size" />
+            <label style="width:10px">×</label>
+            <input type="number" id="ct-px-h" class="num" style="width:72px" title="Clip height in pixels — type to set exact size" />
+            <span class="dim">px</span>
           </div>
           <div class="row"><span id="ct-pixels" class="dim"></span></div>
           <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" data-default="0" /><input type="number" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
@@ -279,6 +289,8 @@
               <option value="10">10-bit</option>
               <option value="12">12-bit</option>
               <option value="16">16-bit</option>
+              <option value="24">24-bit</option>
+              <option value="32">32-bit</option>
             </select>
           </div>
           <div class="row" id="r-bitrate-row">
@@ -295,9 +307,12 @@
           </div>
           <div class="note">Uses the Mac's hardware encoder for ProRes / HEVC / H.264. Falls back to CPU automatically when unavailable.</div>
           <div id="r-codec-note" class="note"></div>
-          <div class="row2" id="r-still-row">
-            <label style="width:80px">Still FPS</label><input type="number" id="r-fps" class="num" value="50" min="1" max="240" />
-            <label style="width:88px">Still length</label><input type="number" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
+          <div id="r-still-row">
+            <div class="subtitle">Image footage → video</div>
+            <div class="row">
+              <label style="min-width:58px">FPS</label><input type="number" id="r-fps" class="num" value="50" min="1" max="240" />
+              <label style="min-width:52px">Length</label><input type="number" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
+            </div>
           </div>
           <div class="row">
             <label>Output</label>

@@ -293,9 +293,37 @@ assert.strictEqual(run.status, 0, (run.stderr || '').slice(-2000));
 assert(/2720x1080/.test(probeInfo(caps.proresPath, outMerged)));
 ok('merged canvas 2720x1080 renders');
 
-// ---------- 16) GPU (VideoToolbox) with CPU fallback ----------
+// ---------- 16b) WAV audio extract + waveform + channels ----------
+console.log('Test 16: WAV audio extract & waveform');
+const srcAv = path.join(tmp, 'xre-test-av.mp4');
+spawnSync(caps.proresPath, ['-y', '-hide_banner', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10:duration=2', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ac', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', srcAv], { encoding: 'utf8', timeout: 120000 });
+const avProbe = render.probeMedia(caps.proresPath, srcAv);
+assert.strictEqual(avProbe.hasAudio, true);
+assert.strictEqual(avProbe.audioChannels, 2, 'stereo detected: ' + JSON.stringify(avProbe));
+ok('audio channels detected (stereo)');
+
+const outWav = path.join(tmp, 'xre-test-audio.wav');
+b = render.buildArgs(p, { src: srcAv, isImage: false, outPath: outWav, inSec: 0.5, outSec: 1.5 }, { codec: 'wav', depth: 24 }, avProbe);
+run = spawnSync(caps.proresPath, b.args, { encoding: 'utf8', timeout: 60000 });
+assert.strictEqual(run.status, 0, (run.stderr || '').slice(-1500));
+const wavInfo = probeInfo(caps.proresPath, outWav);
+assert(/pcm_s24le/.test(wavInfo), '24-bit PCM: ' + wavInfo.slice(-400));
+const wdm = wavInfo.match(/Duration: 00:00:0?(\d+(?:\.\d+)?)/);
+assert(wdm && Math.abs(parseFloat(wdm[1]) - 1) < 0.15, 'trimmed WAV ~1s');
+ok('WAV extract 24-bit with in/out trim');
+
+const peaks = render.extractWaveform(srcAv);
+assert(
+  Array.isArray(peaks) && peaks.length > 100 && Math.max(...peaks) > 0.02,
+  `waveform peaks: len=${peaks && peaks.length} max=${peaks && Math.max(...peaks)}`
+);
+ok(`waveform peaks extracted (${peaks.length} buckets, max ${Math.max(...peaks)})`);
+fs.unlinkSync(srcAv);
+fs.unlinkSync(outWav);
+
+// ---------- 17) GPU (VideoToolbox) with CPU fallback ----------
 (async () => {
-  console.log('Test 16: GPU encode with automatic CPU fallback');
+  console.log('Test 17: GPU encode with automatic CPU fallback');
   const outGpu = path.join(tmp, 'xre-test-gpu.mov');
   const gpuResults = await render.startBatch(null, {
     project: p,

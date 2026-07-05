@@ -22,6 +22,7 @@
     { id: 'h264', label: 'H.264 / AVC', ext: 'mp4', alpha: [], depths: [8], bitrate: true, group: 'Delivery' },
     { id: 'png', label: 'PNG still', ext: 'png', alpha: ['straight', 'only'], depths: [8, 16], still: true, group: 'Image' },
     { id: 'png_seq', label: 'PNG sequence', ext: 'png', alpha: ['straight', 'only'], depths: [8, 16], sequence: true, group: 'Image' },
+    { id: 'wav', label: 'WAV (audio extract)', ext: 'wav', alpha: [], depths: [16, 24, 32], audioOnly: true, group: 'Audio' },
   ];
 
   function byId(id) {
@@ -129,6 +130,10 @@
         if (alpha === 'straight') return ['-pix_fmt', sixteen ? 'rgba64be' : 'rgba'];
         if (alpha === 'only') return ['-pix_fmt', sixteen ? 'gray16be' : 'gray'];
         return ['-pix_fmt', sixteen ? 'rgb48be' : 'rgb24'];
+      }
+      case 'wav': {
+        const pcm = { 16: 'pcm_s16le', 24: 'pcm_s24le', 32: 'pcm_s32le' }[opt.depth || 16] || 'pcm_s16le';
+        return ['-c:a', pcm];
       }
       default:
         throw new Error(`Codec "${codecId}" is not supported for encoding`);

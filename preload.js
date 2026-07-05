@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('xre', {
   writeTempDataUrl: (name, dataUrl) => ipcRenderer.invoke('file:writeTempDataUrl', name, dataUrl),
   writeFileDataUrl: (p, dataUrl) => ipcRenderer.invoke('file:writeDataUrl', p, dataUrl),
   showInFolder: (p) => ipcRenderer.invoke('shell:showInFolder', p),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  previewWaveform: (src) => ipcRenderer.invoke('preview:waveform', src),
   pathParse: (p) => ipcRenderer.invoke('path:parse', p),
   pathJoin: (...parts) => ipcRenderer.invoke('path:join', ...parts),
   ffmpegCaps: () => ipcRenderer.invoke('ffmpeg:caps'),

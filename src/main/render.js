@@ -122,7 +122,45 @@ function probeMedia(ffPath, file) {
   if (pf) out.pixFmt = pf[1];
   const br = err.match(/bitrate:\s*(\d+)\s*kb\/s/);
   if (br) out.bitrateKbps = parseInt(br[1], 10);
+  const aline = (err.match(/Stream #[^\n]*Audio:[^\n]*/) || [''])[0];
+  if (aline) {
+    const am = aline.match(/(mono|stereo|quad|5\.1|7\.1|(\d+)\s*channels)/i);
+    if (am) {
+      out.audioChannels = am[2]
+        ? parseInt(am[2], 10)
+        : { mono: 1, stereo: 2, quad: 4, '5.1': 6, '7.1': 8 }[am[1].toLowerCase()] || null;
+      out.audioLayout = am[1];
+    }
+  }
   return out;
+}
+
+// Mono peak waveform for the trim timeline (max-abs per bucket, 0..1)
+function extractWaveform(src, buckets) {
+  buckets = buckets || 600;
+  const caps = getCapabilities();
+  const ffPath = caps.proresPath;
+  if (!ffPath) return null;
+  const r = spawnSync(
+    ffPath,
+    ['-hide_banner', '-loglevel', 'error', '-i', src, '-map', '0:a:0', '-ac', '1', '-ar', '4000', '-f', 's16le', 'pipe:1'],
+    { timeout: 120000, maxBuffer: 512 * 1024 * 1024 }
+  );
+  if (r.status !== 0 || !r.stdout || r.stdout.length < 4) return null;
+  const buf = r.stdout;
+  const n = Math.floor(buf.length / 2);
+  const per = Math.max(1, Math.floor(n / buckets));
+  const peaks = [];
+  for (let b = 0; b < buckets && b * per < n; b++) {
+    let m = 0;
+    const end = Math.min(n, (b + 1) * per);
+    for (let i = b * per; i < end; i++) {
+      const v = Math.abs(buf.readInt16LE(i * 2));
+      if (v > m) m = v;
+    }
+    peaks.push(Math.round((m / 32768) * 1000) / 1000);
+  }
+  return peaks;
 }
 
 // Extract a single frame as PNG buffer (for the export page live preview).
@@ -182,6 +220,26 @@ function buildArgs(project, job, opts, probe) {
   const codecDef = Codecs.byId(opts.codec);
   if (!codecDef) throw new Error(`Unknown codec "${opts.codec}"`);
   if (codecDef.unsupported) throw new Error(codecDef.unsupported);
+
+  // audio-only export (WAV extract): no video pipeline at all
+  if (codecDef.audioOnly) {
+    if (job.isImage) throw new Error('Image footage has no audio');
+    if (probe && probe.hasAudio === false) throw new Error('Source has no audio track');
+    const aIn = job.inSec > 0 ? job.inSec : 0;
+    const aOut = job.outSec > aIn ? job.outSec : null;
+    const args = [
+      '-y', '-hide_banner',
+      ...(aIn > 0 ? ['-ss', String(aIn)] : []),
+      '-i', job.src,
+      '-vn', '-map', '0:a:0',
+      ...Codecs.encoderArgs(opts.codec, opts),
+      ...(aOut ? ['-t', String(aOut - aIn)] : []),
+      '-progress', 'pipe:1', '-nostats',
+      job.outPath,
+    ];
+    const aDur = aOut ? aOut - aIn : probe && probe.durationSec ? probe.durationSec - aIn : null;
+    return { args, durationSec: aDur };
+  }
 
   const IW = Math.max(1, Math.round(project.input.width));
   const IH = Math.max(1, Math.round(project.input.height));
@@ -428,6 +486,7 @@ module.exports = {
   ffmpegForCodec,
   probeMedia,
   extractFrame,
+  extractWaveform,
   effectiveSlices,
   buildArgs,
   runFfmpeg,

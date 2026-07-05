@@ -1551,6 +1551,10 @@ function refreshFileList() {
   });
   updateStartButton();
   $('rp-clip-name').textContent = activeFile() ? baseName(activeFile().path) : 'no selection';
+  // keep the "image footage" settings row in sync with the list contents
+  const anyImage = rp.files.some((f) => f.isImage);
+  const def = currentCodec();
+  $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
 }
 
 function updateStartButton() {
@@ -1601,7 +1605,10 @@ function selectFile(i) {
   refreshFileList();
   refreshClipControls();
   layoutTimeline();
-  if (f) fetchFrame(true);
+  if (f) {
+    fetchFrame(true);
+    loadWaveform(f);
+  }
   drawRenderPreview();
 }
 
@@ -1640,6 +1647,48 @@ function layoutTimeline() {
   } else {
     $('tl-len').textContent = f && f.isImage ? 'still image' : '—';
   }
+  ['tl-in-n', 'tl-out-n'].forEach((id) => ($(id).disabled = !usable));
+  if (document.activeElement !== $('tl-in-n')) $('tl-in-n').value = usable && f.inSec != null ? f.inSec.toFixed(2) : '';
+  if (document.activeElement !== $('tl-out-n')) $('tl-out-n').value = usable && f.outSec != null ? f.outSec.toFixed(2) : '';
+  drawWaveform();
+}
+
+function drawWaveform() {
+  const f = activeFile();
+  const wc = $('tl-wave');
+  if (!wc) return;
+  const track = $('tl-track');
+  const r = track.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  wc.width = Math.max(2, Math.round(r.width * dpr));
+  wc.height = Math.max(2, Math.round(r.height * dpr));
+  const g = wc.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, r.width, r.height);
+  if (!f || f.isImage || !f.waveform || !f.waveform.length) return;
+  const n = f.waveform.length;
+  const mid = r.height / 2;
+  g.fillStyle = 'rgba(90, 150, 230, 0.55)';
+  const bw = r.width / n;
+  for (let i = 0; i < n; i++) {
+    const h = Math.max(1, f.waveform[i] * (r.height - 4));
+    g.fillRect(i * bw, mid - h / 2, Math.max(1, bw - 0.5), h);
+  }
+}
+
+function loadWaveform(f) {
+  if (!f || f.isImage || f.waveform || f.waveLoading) return;
+  if (f.probe && f.probe.hasAudio === false) return;
+  f.waveLoading = true;
+  api.previewWaveform(f.path).then((peaks) => {
+    f.waveLoading = false;
+    if (peaks && peaks.length) {
+      f.waveform = peaks;
+      if (activeFile() === f) drawWaveform();
+    }
+  }).catch(() => {
+    f.waveLoading = false;
+  });
 }
 
 function timelineSecFromEvent(e) {
@@ -1742,7 +1791,7 @@ function refreshClipInfo() {
     if (pr.durationSec) parts.push(`${pr.durationSec.toFixed(2)} s`);
     if (pr.fps) parts.push(`${pr.fps} fps`);
     if (pr.bitrateKbps) parts.push(`${(pr.bitrateKbps / 1000).toFixed(1)} Mbps`);
-    parts.push(pr.hasAudio ? 'audio ✓' : 'no audio');
+    parts.push(pr.hasAudio ? `audio ✓${pr.audioLayout ? ` (${pr.audioLayout})` : ''}` : 'no audio');
     rows.push(parts.join(' · '));
   }
   el.innerHTML = rows.join('<br>');
@@ -1788,10 +1837,23 @@ function refreshPixelReadout() {
   const el = $('ct-pixels');
   if (!f || !f.probe || !f.probe.width) {
     el.textContent = '';
+    if (document.activeElement !== $('ct-px-w')) $('ct-px-w').value = '';
+    if (document.activeElement !== $('ct-px-h')) $('ct-px-h').value = '';
     return;
   }
   const lay = Geometry.clipLayout(f.probe.width, f.probe.height, f.transform, project.input.width, project.input.height);
-  el.textContent = `→ clip ${Math.round(lay.bw)}×${Math.round(lay.bh)} px on canvas ${project.input.width}×${project.input.height}`;
+  el.textContent = `on canvas ${project.input.width}×${project.input.height}`;
+  if (document.activeElement !== $('ct-px-w')) $('ct-px-w').value = Math.round(lay.bw);
+  if (document.activeElement !== $('ct-px-h')) $('ct-px-h').value = Math.round(lay.bh);
+}
+
+// base (unscaled) clip size for the current fit mode — used to convert px <-> scale%
+function clipBaseSize(f) {
+  return Geometry.clipLayout(
+    f.probe.width, f.probe.height,
+    { mode: f.transform.mode, scale: 100, scaleY: 100, rotation: 0 },
+    project.input.width, project.input.height
+  );
 }
 
 function bindClipControls() {
@@ -1811,6 +1873,34 @@ function bindClipControls() {
   $('ct-scale-n').onchange = () => { $('ct-scale').value = $('ct-scale-n').value; upd((t) => (t.scale = Math.max(1, parseFloat($('ct-scale-n').value) || 100))); };
   $('ct-scaley').oninput = () => { $('ct-scaley-n').value = $('ct-scaley').value; upd((t) => (t.scaleY = parseFloat($('ct-scaley').value))); };
   $('ct-scaley-n').onchange = () => { $('ct-scaley').value = $('ct-scaley-n').value; upd((t) => (t.scaleY = Math.max(1, parseFloat($('ct-scaley-n').value) || 100))); };
+  // type exact pixel size
+  $('ct-px-w').onchange = () => {
+    const f = activeFile();
+    if (!f || !f.probe || !f.probe.width) return;
+    const wanted = Math.max(1, parseInt($('ct-px-w').value, 10) || 0);
+    const base = clipBaseSize(f);
+    f.transform.scale = Math.max(1, Math.round((wanted / base.bw) * 10000) / 100);
+    refreshClipControls();
+    refreshFileList();
+    drawRenderPreview();
+    syncExportList();
+  };
+  $('ct-px-h').onchange = () => {
+    const f = activeFile();
+    if (!f || !f.probe || !f.probe.width) return;
+    const wanted = Math.max(1, parseInt($('ct-px-h').value, 10) || 0);
+    const base = clipBaseSize(f);
+    const pct = Math.max(1, Math.round((wanted / base.bh) * 10000) / 100);
+    if (scaleLinked(f.transform)) {
+      f.transform.scaleY = pct; // auto-unlink so width stays as-is
+    } else {
+      f.transform.scaleY = pct;
+    }
+    refreshClipControls();
+    refreshFileList();
+    drawRenderPreview();
+    syncExportList();
+  };
   $('ct-link').onclick = () => {
     const f = activeFile();
     if (!f) return;
@@ -1977,9 +2067,15 @@ function refreshCodecUI() {
   if (def.sequence) notes.push('Frames are written into a new folder per export.');
   if (def.still) notes.push('One remapped frame at the current preview time — ideal for PowerPoint.');
   if (def.id === 'prores_4444' && $('r-alpha').value !== 'none') notes.push('Alpha requires footage with an alpha channel.');
+  if (def.audioOnly) notes.push('Extracts the audio track as WAV — no video is rendered. Uses the in/out trim.');
+  const af = activeFile();
+  if (!def.audioOnly && !def.still && af && af.probe && af.probe.hasAudio) {
+    notes.push(`Audio passthrough: ${af.probe.audioLayout || 'source'} (${af.probe.audioChannels || '?'} ch) as PCM${def.ext === 'mp4' ? '/AAC' : ''}.`);
+  }
   $('r-codec-note').textContent = notes.join(' ');
-  const anyImage = rp.files.some((f) => f.selected !== false && f.isImage);
-  $('r-still-row').style.display = anyImage && !def.still ? '' : 'none';
+  // still settings apply when image footage is exported to a video codec
+  const anyImage = rp.files.some((f) => f.isImage);
+  $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
   updateStartButton();
 }
 
@@ -2063,6 +2159,44 @@ async function startRender(filesOverride, optsOverride) {
   const fps = clampInt($('r-fps').value, 1, 240);
   const imageDuration = clampInt($('r-dur').value, 1, 3600);
   const gpu = $('r-gpu').checked;
+
+  // audio-only export: one WAV per (video) file, no screens/mapping involved
+  if (def.audioOnly) {
+    const audioFiles = files.filter((f) => !f.isImage && (!f.probe || f.probe.hasAudio !== false));
+    if (!audioFiles.length) {
+      alert('No selected video footage with audio to extract.');
+      return;
+    }
+    const wavJobs = [];
+    for (const f of audioFiles) {
+      const pp = await api.pathParse(f.path);
+      const dest = rp.destDir || pp.dir;
+      wavJobs.push({
+        src: f.path,
+        isImage: false,
+        outPath: await api.pathJoin(dest, `${pp.base}_audio_${depth}bit.wav`),
+        inSec: f.inSec,
+        outSec: f.outSec,
+        label: `${baseName(f.path)} → WAV`,
+      });
+    }
+    rp.running = true;
+    updateStartButton();
+    $('rp-add').disabled = true;
+    $('r-progress').style.display = '';
+    $('r-log').innerHTML = '';
+    $('r-bar').style.width = '0%';
+    try {
+      await api.renderStart({ project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices }, jobs: wavJobs, codec: codecId, depth, fps, imageDuration });
+    } catch (err) {
+      $('r-log').innerHTML += `<div class="err">✗ ${String(err.message || err).split('\n')[0]}</div>`;
+    }
+    rp.running = false;
+    updateStartButton();
+    $('rp-add').disabled = false;
+    processWatchQueue();
+    return;
+  }
 
   // multiple screens: separate / merged / both
   let outMode = 'separate';
@@ -2318,6 +2452,7 @@ async function setReferenceFromPath(p) {
 
 // ---------------- bind UI ----------------
 function bindUI() {
+  document.querySelector('.brand .logo').onclick = () => api.openExternal('https://www.xtremeled.nl/');
   $('tab-input').onclick = () => switchView('input');
   $('tab-output').onclick = () => switchView('output');
   $('btn-render').onclick = () => switchPage('render');
@@ -2731,6 +2866,31 @@ function bindUI() {
     if (!f) return;
     f.inSec = null;
     f.outSec = null;
+    layoutTimeline();
+    syncExportList();
+  };
+  // precise numeric in/out
+  $('tl-in-n').onchange = () => {
+    const f = activeFile();
+    if (!f || f.isImage) return;
+    const v = parseFloat($('tl-in-n').value);
+    if (Number.isNaN(v) || $('tl-in-n').value === '') {
+      f.inSec = null;
+    } else {
+      f.inSec = Math.max(0, Math.min(v, (f.outSec != null ? f.outSec : fileDuration(f)) - 0.05));
+    }
+    layoutTimeline();
+    syncExportList();
+  };
+  $('tl-out-n').onchange = () => {
+    const f = activeFile();
+    if (!f || f.isImage) return;
+    const v = parseFloat($('tl-out-n').value);
+    if (Number.isNaN(v) || $('tl-out-n').value === '') {
+      f.outSec = null;
+    } else {
+      f.outSec = Math.min(fileDuration(f), Math.max(v, (f.inSec != null ? f.inSec : 0) + 0.05));
+    }
     layoutTimeline();
     syncExportList();
   };

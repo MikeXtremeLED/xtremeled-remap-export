@@ -164,6 +164,10 @@ ipcMain.handle('shell:showInFolder', (e, p) => {
   shell.showItemInFolder(p);
 });
 
+ipcMain.handle('shell:openExternal', (e, url) => {
+  if (/^https?:\/\//.test(url)) shell.openExternal(url);
+});
+
 ipcMain.handle('path:parse', (e, p) => ({
   dir: path.dirname(p),
   base: path.basename(p, path.extname(p)),
@@ -181,6 +185,13 @@ ipcMain.handle('preview:probe', (e, src) => {
   return renderMod.probeMedia(caps.proresPath, src);
 });
 ipcMain.handle('preview:frame', (e, src, timeSec) => renderMod.extractFrame(src, timeSec || 0));
+ipcMain.handle('preview:waveform', (e, src) => {
+  try {
+    return renderMod.extractWaveform(src);
+  } catch (err) {
+    return null;
+  }
+});
 
 // ---------------- watch folder ----------------
 const MEDIA_EXTS = new Set([
