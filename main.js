@@ -11,6 +11,29 @@ let win = null;
 const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
 const makeIconArg = process.argv.find((a) => a.startsWith('--makeicon='));
 const makeHeroArg = process.argv.find((a) => a.startsWith('--makehero='));
+const makePosterArg = process.argv.find((a) => a.startsWith('--makeposter='));
+
+// Capture tools/poster.html (Facebook poster) at 1080x1350
+function makePoster() {
+  const outPng = makePosterArg.slice('--makeposter='.length);
+  const w = new BrowserWindow({
+    width: 1080, height: 1350, show: false, frame: false,
+    webPreferences: { offscreen: true },
+  });
+  w.loadFile(path.join(__dirname, 'tools/poster.html'));
+  w.webContents.once('did-finish-load', () => {
+    setTimeout(async () => {
+      try {
+        const img = await w.webContents.capturePage({ x: 0, y: 0, width: 1080, height: 1350 });
+        fs.writeFileSync(outPng, img.toPNG());
+        console.log('Poster saved:', outPng);
+      } catch (e) {
+        console.error('Poster capture failed:', e);
+      }
+      app.quit();
+    }, 800);
+  });
+}
 
 // Capture tools/hero.html (README illustration) at 2000x780
 function makeHero() {
@@ -104,6 +127,7 @@ function createWindow() {
 app.whenReady().then(() => {
   if (makeIconArg) return makeIcon();
   if (makeHeroArg) return makeHero();
+  if (makePosterArg) return makePoster();
   const iconPng = path.join(__dirname, 'build/icon.png');
   if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
     try {
