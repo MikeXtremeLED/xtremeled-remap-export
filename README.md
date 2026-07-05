@@ -9,6 +9,8 @@
   <sub>macOS (Intel & Apple Silicon) · Windows · Free & open source · Built for real-world LED shows by <a href="https://www.xtremeled.nl/">XtremeLED</a></sub>
 </p>
 
+![Stageview content → XtremeLED Remap Export → output mapped](docs/hero.png)
+
 ---
 
 ## Why this exists

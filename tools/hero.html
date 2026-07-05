@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 2000px; height: 780px; background: #14171a; overflow: hidden;
+    font-family: -apple-system, 'Helvetica Neue', sans-serif; }
+  #wrap { display: flex; align-items: center; justify-content: center; gap: 34px; height: 100%; padding: 0 40px; box-sizing: border-box; }
+  .card { background: #0b0d0f; border: 1px solid #33383c; border-radius: 14px; padding: 18px 18px 14px; }
+  .card h3 { margin: 0 0 12px; color: #8b9195; font-size: 20px; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase; text-align: center; }
+  .card h3 b { color: #f7941e; }
+  canvas { display: block; border-radius: 4px; }
+  .stack canvas { margin-bottom: 10px; }
+  .stack canvas:last-child { margin-bottom: 0; }
+  #mid { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #mid img { width: 170px; height: 170px; }
+  #mid .name { color: #b3b7ba; font-weight: 800; font-size: 21px; text-align: center; line-height: 1.25; }
+  #mid .name b { color: #f7941e; }
+  .arrow { color: #f7941e; font-size: 92px; font-weight: 900; line-height: 1; padding-bottom: 26px; }
+  .cap { color: #6d7276; font-size: 15px; text-align: center; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="card">
+    <h3>Stageview <b>content</b></h3>
+    <div id="stage"></div>
+    <div class="cap">one render on the full stage canvas</div>
+  </div>
+  <div class="arrow">➜</div>
+  <div id="mid">
+    <img src="../build/icon.png" />
+    <div class="name"><b>X</b>TREME LED<br>REMAP EXPORT</div>
+  </div>
+  <div class="arrow">➜</div>
+  <div class="card">
+    <h3>Output <b>mapped</b></h3>
+    <div id="output" class="stack"></div>
+    <div class="cap">ready to play on any device — DXV3 · HAP · ProRes · H.264</div>
+  </div>
+</div>
+
+<script>
+  // LED-screen checkerboard in the style of the app's test pattern
+  function ledScreen(w, h, c1, c2, label, sub) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    const cell = Math.max(12, Math.round(h / 4));
+    for (let y = 0, j = 0; y < h; y += cell, j++) {
+      for (let x = 0, i = 0; x < w; x += cell, i++) {
+        g.fillStyle = (i + j) % 2 ? c1 : c2;
+        g.fillRect(x, y, cell, cell);
+      }
+    }
+    g.strokeStyle = 'rgba(255,255,255,0.55)';
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(0, 0); g.lineTo(w, h);
+    g.moveTo(w, 0); g.lineTo(0, h);
+    g.stroke();
+    g.beginPath();
+    g.arc(w / 2, h / 2, Math.min(w, h) / 2 - 3, 0, Math.PI * 2);
+    g.stroke();
+    // label pill
+    let fs = Math.min(h * 0.3, 30);
+    g.font = `bold ${fs}px -apple-system, sans-serif`;
+    while (fs > 8 && g.measureText(label).width > w * 0.8) {
+      fs *= 0.9;
+      g.font = `bold ${fs}px -apple-system, sans-serif`;
+    }
+    const tw = g.measureText(label).width;
+    const sf = fs * 0.62;
+    g.fillStyle = 'rgba(8,10,12,0.85)';
+    g.fillRect(w / 2 - tw / 2 - fs * 0.5, h / 2 - fs * 0.95, tw + fs, fs * 1.35);
+    g.fillStyle = '#fff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(label, w / 2, h / 2 - fs * 0.25);
+    g.font = `bold ${sf}px -apple-system, sans-serif`;
+    const sw = g.measureText(sub).width;
+    g.fillStyle = 'rgba(8,10,12,0.85)';
+    g.fillRect(w / 2 - sw / 2 - sf * 0.5, h / 2 + fs * 0.42, sw + sf, sf * 1.35);
+    g.fillStyle = '#fff';
+    g.fillText(sub, w / 2, h / 2 + fs * 0.42 + sf * 0.7);
+    return c;
+  }
+
+  // ---- stageview: screens positioned on the stage canvas (like the venue) ----
+  (function () {
+    const W = 700, H = 460;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, W, H);
+    // subtle canvas grid
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    for (let x = 0; x < W; x += 35) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+    for (let y = 0; y < H; y += 35) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+    // big purple main wall (21.5x4m), left
+    g.drawImage(ledScreen(430, 300, '#5a4fcf', '#2f2a75', '21.5X4M P3.91', '5504×1024'), 12, 92);
+    // red strip (21.5x1m) top right
+    g.drawImage(ledScreen(238, 62, '#d21f3c', '#7a1024', '21.5X1M P3.91', '5504×256'), 452, 132);
+    // green strip (20.5x1m) below it
+    g.drawImage(ledScreen(238, 62, '#6cbf3f', '#38641f', '20.5X1M P3.91', '5248×256'), 452, 234);
+    document.getElementById('stage').appendChild(c);
+  })();
+
+  // ---- output: the same screens stacked as rows on the output canvas ----
+  (function () {
+    const holder = document.getElementById('output');
+    const W = 700;
+    const wrap = document.createElement('canvas');
+    wrap.width = W; wrap.height = 460;
+    const g = wrap.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, W, 460);
+    g.drawImage(ledScreen(656, 74, '#6cbf3f', '#38641f', '20.5X1M P3.91', '5248×256'), 12, 14);
+    g.drawImage(ledScreen(686, 74, '#d21f3c', '#7a1024', '21.5X1M P3.91', '5504×256'), 12, 102);
+    g.drawImage(ledScreen(686, 250, '#5a4fcf', '#2f2a75', '21.5X4M P3.91', '5504×1024'), 12, 190);
+    holder.appendChild(wrap);
+  })();
+</script>
+</body>
+</html>

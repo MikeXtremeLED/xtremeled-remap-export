@@ -10,6 +10,32 @@ app.setName('XtremeLED Remap Export');
 let win = null;
 const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
 const makeIconArg = process.argv.find((a) => a.startsWith('--makeicon='));
+const makeHeroArg = process.argv.find((a) => a.startsWith('--makehero='));
+
+// Capture tools/hero.html (README illustration) at 2000x780
+function makeHero() {
+  const outPng = makeHeroArg.slice('--makehero='.length);
+  const heroWin = new BrowserWindow({
+    width: 2000,
+    height: 780,
+    show: false,
+    frame: false,
+    webPreferences: { offscreen: true },
+  });
+  heroWin.loadFile(path.join(__dirname, 'tools/hero.html'));
+  heroWin.webContents.once('did-finish-load', () => {
+    setTimeout(async () => {
+      try {
+        const img = await heroWin.webContents.capturePage({ x: 0, y: 0, width: 2000, height: 780 });
+        fs.writeFileSync(outPng, img.toPNG());
+        console.log('Hero saved:', outPng);
+      } catch (e) {
+        console.error('Hero capture failed:', e);
+      }
+      app.quit();
+    }, 800);
+  });
+}
 
 function makeIcon() {
   const outPng = makeIconArg.slice('--makeicon='.length);
@@ -77,6 +103,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   if (makeIconArg) return makeIcon();
+  if (makeHeroArg) return makeHero();
   const iconPng = path.join(__dirname, 'build/icon.png');
   if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
     try {
