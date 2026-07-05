@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; background: #0c0f11; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const W = 1080, H = 1920;
+const cv = document.getElementById('c');
+const g = cv.getContext('2d');
+
+// ---------- helpers ----------
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp = (a,b,t)=>a+(b-a)*t;
+const smooth = (t)=>{ t=clamp(t,0,1); return t*t*(3-2*t); };
+// progress within [a,b]
+const seg = (t,a,b)=>smooth((t-a)/(b-a));
+const easeOutBack = (t)=>{ t=clamp(t,0,1); const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2); };
+
+// ---------- LED screen tiles (static images) ----------
+function ledScreen(w,h,c1,c2,label,sub){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const x=c.getContext('2d');
+  const cell=Math.max(11,Math.round(h/4));
+  for(let y=0,j=0;y<h;y+=cell,j++)for(let i=0,px=0;px<w;px+=cell,i++){x.fillStyle=(i+j)%2?c1:c2;x.fillRect(px,y,cell,cell);}
+  x.strokeStyle='rgba(255,255,255,0.5)'; x.lineWidth=1.4;
+  x.beginPath(); x.moveTo(0,0); x.lineTo(w,h); x.moveTo(w,0); x.lineTo(0,h); x.stroke();
+  x.beginPath(); x.arc(w/2,h/2,Math.min(w,h)/2-3,0,Math.PI*2); x.stroke();
+  let fs=Math.min(h*0.32,30);
+  x.font=`bold ${fs}px -apple-system,sans-serif`;
+  while(fs>8 && x.measureText(label).width>w*0.82){fs*=0.9;x.font=`bold ${fs}px -apple-system,sans-serif`;}
+  const tw=x.measureText(label).width, sf=fs*0.58;
+  x.fillStyle='rgba(6,8,10,0.85)'; x.fillRect(w/2-tw/2-fs*0.5,h/2-fs*0.9,tw+fs,fs*1.28);
+  x.fillStyle='#fff'; x.textAlign='center'; x.textBaseline='middle';
+  x.fillText(label,w/2,h/2-fs*0.22);
+  x.font=`bold ${sf}px -apple-system,sans-serif`;
+  const sw=x.measureText(sub).width;
+  x.fillStyle='rgba(6,8,10,0.85)'; x.fillRect(w/2-sw/2-sf*0.5,h/2+fs*0.38,sw+sf,sf*1.28);
+  x.fillStyle='#fff'; x.fillText(sub,w/2,h/2+fs*0.38+sf*0.64);
+  return c;
+}
+const PURPLE=['#5a4fcf','#2f2a75'], RED=['#d21f3c','#7a1024'], GREEN=['#6cbf3f','#38641f'];
+const scr_main = ledScreen(520,330,PURPLE[0],PURPLE[1],'21.5X4M','5504×1024');
+const scr_red  = ledScreen(300,72,RED[0],RED[1],'21.5X1M','5504×256');
+const scr_grn  = ledScreen(290,72,GREEN[0],GREEN[1],'20.5X1M','5248×256');
+
+// app icon
+let icon=null, iconReady=false;
+const im=new Image();
+im.onload=()=>{icon=im;iconReady=true;};
+im.onerror=()=>{iconReady=true;};
+im.src='../build/icon.png';
+
+// ---------- logo drawing ----------
+function drawLogo(cx, cy, scale, alpha){
+  g.save();
+  g.globalAlpha=alpha;
+  g.translate(cx,cy);
+  g.scale(scale,scale);
+  g.textBaseline='alphabetic';
+  g.textAlign='left';
+  const fx=110, ft=84;
+  // measure widths
+  g.font=`900 ${fx}px -apple-system,sans-serif`;
+  const wX=g.measureText('X').width;
+  g.font=`800 ${ft}px -apple-system,sans-serif`;
+  const wT=g.measureText('TREME').width;
+  const wL=g.measureText('L').width, wD=g.measureText('D').width;
+  const gap=28, barW=52, barGap=8;
+  const total=wX+wT+gap+wL+8+barW+8+wD;
+  let x=-total/2;
+  const base=ft*0.34; // baseline offset from center
+  // X
+  g.font=`900 ${fx}px -apple-system,sans-serif`; g.fillStyle='#f7941e';
+  g.fillText('X', x, base); x+=wX-2;
+  // TREME
+  g.font=`800 ${ft}px -apple-system,sans-serif`; g.fillStyle='#c9cdd0';
+  g.fillText('TREME', x, base); x+=wT+gap;
+  // L
+  g.fillText('L', x, base); x+=wL+8;
+  // bars (E)
+  const barsH=ft*0.70, bx=x, bTop=base-barsH;
+  const cols=['#e8492e','#4caf50','#2196f3'];
+  const bh=(barsH-2*barGap)/3;
+  for(let i=0;i<3;i++){ g.fillStyle=cols[i]; g.fillRect(bx, bTop+i*(bh+barGap), barW, bh); }
+  x+=barW+8;
+  // D
+  g.fillStyle='#c9cdd0'; g.fillText('D', x, base);
+  g.restore();
+}
+
+function pill(text, cx, cy, fs, padX, padY, bg, fg, alpha){
+  g.save(); g.globalAlpha=alpha;
+  g.font=`bold ${fs}px -apple-system,sans-serif`; g.textAlign='center'; g.textBaseline='middle';
+  const w=g.measureText(text).width+padX*2, h=fs+padY*2;
+  roundRect(cx-w/2,cy-h/2,w,h,12); g.fillStyle=bg; g.fill();
+  g.fillStyle=fg; g.fillText(text,cx,cy+1);
+  g.restore();
+  return w;
+}
+function roundRect(x,y,w,h,r){ g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); }
+
+function text(str, cx, cy, font, color, alpha, align){
+  g.save(); g.globalAlpha=alpha; g.font=font; g.fillStyle=color; g.textAlign=align||'center'; g.textBaseline='middle';
+  g.fillText(str,cx,cy); g.restore();
+}
+
+function bg(t){
+  const grd=g.createRadialGradient(W/2,300,100,W/2,700,1400);
+  grd.addColorStop(0,'#1b2126'); grd.addColorStop(1,'#0b0e10');
+  g.fillStyle=grd; g.fillRect(0,0,W,H);
+  // subtle grid
+  g.strokeStyle='rgba(255,255,255,0.03)'; g.lineWidth=1;
+  const off=(t*30)%60;
+  for(let x=-60+off;x<W;x+=60){g.beginPath();g.moveTo(x,0);g.lineTo(x,H);g.stroke();}
+  for(let y=-60+off;y<H;y+=60){g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();}
+}
+
+// draw a "card" frame with title
+function card(x,y,w,h,alpha,title,titleAccent){
+  g.save(); g.globalAlpha=alpha;
+  roundRect(x,y,w,h,18); g.fillStyle='#06080a'; g.fill();
+  g.lineWidth=2; g.strokeStyle='#2c3237'; g.stroke();
+  g.restore();
+  if(title){
+    g.save(); g.globalAlpha=alpha;
+    g.font='800 26px -apple-system,sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillStyle='#8b9195';
+    // title with accent word
+    const parts=title.split('|');
+    const full=parts.join(' ');
+    const fw=g.measureText(full).width;
+    let tx=x+w/2-fw/2; g.textAlign='left';
+    g.fillStyle='#8b9195'; g.fillText(parts[0]+' ',tx,y+34); tx+=g.measureText(parts[0]+' ').width;
+    g.fillStyle='#f7941e'; g.fillText(parts[1],tx,y+34);
+    g.restore();
+  }
+}
+
+// ---------- main animation ----------
+const DUR=16; // seconds
+function draw(t){
+  bg(t);
+
+  // ===== Scene 1: logo intro (0 - 2.6), then move to header =====
+  const introHold = clamp((t-0)/1.4,0,1);
+  const moveUp = seg(t,2.4,3.0);
+  // logo position: center (960 mid) -> header (y 150)
+  const logoCX = W/2;
+  const logoCY = lerp(760, 150, moveUp);
+  const logoScale = lerp(1.35, 0.62, moveUp);
+  const logoAlpha = smooth(clamp(t/0.6,0,1));
+  // assemble: X drops in, rest fades
+  drawLogo(logoCX, logoCY, logoScale, logoAlpha);
+  // subtitle under logo (only during intro, fades as we move up)
+  const subA = seg(t,0.8,1.4)*(1-moveUp);
+  text('REMAP EXPORT', logoCX, logoCY+lerp(95,60,moveUp)*logoScale/1.35+40*(1-moveUp), '800 34px -apple-system,sans-serif', '#f7941e', subA*smooth(clamp((t-0.8)/0.5,0,1)));
+  if(moveUp>0.5){
+    text('REMAP EXPORT', logoCX, 214, '700 24px -apple-system,sans-serif', '#f7941e', (moveUp-0.5)*2);
+  }
+
+  // hook line under intro logo (1.2 - 2.4)
+  const hookA = seg(t,1.4,1.9) * (1-seg(t,2.2,2.6));
+  text('Complex LED mapping,', W/2, 990, '600 42px -apple-system,sans-serif', '#e6e9eb', hookA);
+  text('simple playback.', W/2, 1050, '800 46px -apple-system,sans-serif', '#ffffff', hookA);
+
+  // ===== Scene 2: stageview card (3.0 - ) =====
+  const stageA = seg(t,3.0,3.7);
+  const stageSlide = 1-stageA;
+  const cardX=70, cardW=W-140;
+  const stageY=300 + stageSlide*80, stageH=440;
+  if(stageA>0.01){
+    card(cardX, stageY, cardW, stageH, stageA, 'STAGEVIEW|CONTENT');
+    // stage with screens
+    g.save(); g.globalAlpha=stageA;
+    const sx=cardX+60, sy=stageY+80;
+    // black stage bg
+    g.fillStyle='#000'; roundRect(sx,sy,cardW-120,320,8); g.fill();
+    g.drawImage(scr_main, sx+20, sy+90, 470, 210);
+    g.drawImage(scr_red, sx+520, sy+80, 250, 60);
+    g.drawImage(scr_grn, sx+520, sy+160, 250, 60);
+    g.restore();
+  }
+
+  // ===== transform arrow (6.2 - 7.0) =====
+  const arrowA = seg(t,6.0,6.6);
+  const arrowPulse = 0.5+0.5*Math.sin(t*6);
+  if(arrowA>0.01){
+    g.save(); g.globalAlpha=arrowA;
+    // icon
+    if(icon){ const s=110+8*arrowPulse; g.drawImage(icon, W/2-s/2-90, 800-s/2, s, s); }
+    // chevrons down
+    g.strokeStyle='#f7941e'; g.lineWidth=12; g.lineCap='round';
+    const ax=W/2+70;
+    for(let k=0;k<2;k++){ const yy=770+k*36+arrowPulse*6; g.beginPath(); g.moveTo(ax-34,yy); g.lineTo(ax,yy+30); g.lineTo(ax+34,yy); g.stroke(); }
+    g.restore();
+  }
+
+  // ===== Scene 3: output card (6.8 - ) =====
+  const outA = seg(t,6.8,7.5);
+  const outSlide=1-outA;
+  const outY=920 + outSlide*80, outH=470;
+  if(outA>0.01){
+    card(cardX, outY, cardW, outH, outA, 'OUTPUT|MAPPED');
+    g.save(); g.globalAlpha=outA;
+    const ox=cardX+60, oy=outY+80;
+    g.fillStyle='#000'; roundRect(ox,oy,cardW-120,350,8); g.fill();
+    // stacked rows animate in one by one
+    const r1=seg(t,7.2,7.7), r2=seg(t,7.5,8.0), r3=seg(t,7.8,8.4);
+    g.globalAlpha=outA*r1; g.drawImage(scr_grn, ox+20, oy+20, 400, 56);
+    g.globalAlpha=outA*r2; g.drawImage(scr_red, ox+20, oy+90, 480, 56);
+    g.globalAlpha=outA*r3; g.drawImage(scr_main, ox+20, oy+160, 480, 165);
+    g.restore();
+  }
+
+  // ===== Scene 4: play from any device (9.2 - 11.6) =====
+  const playHdr = seg(t,9.2,9.8)*(1-seg(t,11.3,11.8));
+  text('Play from ANY device', W/2, 1500, '800 50px -apple-system,sans-serif', '#ffffff', playHdr);
+  const chips=['Laptop','VLC','PowerPoint','Media player'];
+  let cxx=W/2;
+  // layout chips centered on two virtual rows -> single row measure
+  g.font='bold 30px -apple-system,sans-serif';
+  const widths=chips.map(c=>g.measureText(c).width+48);
+  const gapC=18;
+  // row split: 2 + 2
+  const row1=[0,1], row2=[2,3];
+  function drawChipRow(idxs, cy, baseDelay){
+    const totalW=idxs.reduce((s,i)=>s+widths[i],0)+gapC*(idxs.length-1);
+    let x=W/2-totalW/2;
+    idxs.forEach((i,k)=>{
+      const a=seg(t,9.9+ (i)*0.18, 10.4+(i)*0.18)*(1-seg(t,11.3,11.8));
+      pill(chips[i], x+widths[i]/2, cy, 30, 24, 12, '#21262b', '#ffffff', a);
+      // border
+      x+=widths[i]+gapC;
+    });
+  }
+  drawChipRow(row1, 1580, 0);
+  drawChipRow(row2, 1650, 0.2);
+
+  // ===== Scene 5: features quick (11.8 - 13.4) =====
+  const featBlock=(1-seg(t,13.2,13.7));
+  const feats=[
+    ['🎬','Export DXV3 · HAP · ProRes · HEVC · H.264 · PNG'],
+    ['🎛️','Slice mapping like Resolume — import & export XML'],
+    ['🎭','Masks · rotation · flip · multiple screens'],
+  ];
+  feats.forEach((f,i)=>{
+    const a=seg(t,11.8+i*0.22, 12.3+i*0.22)*featBlock;
+    text(f[0]+'  '+f[1], W/2, 1480+i*66, '600 32px -apple-system,sans-serif', '#d6d9db', a);
+  });
+
+  // ===== Scene 6: CTA (13.6 - 16) =====
+  const ctaA=seg(t,13.7,14.3);
+  if(ctaA>0.01){
+    text('100% FREE & OPEN SOURCE', W/2, 1500, '800 46px -apple-system,sans-serif', '#35e0b2', ctaA);
+    text('macOS (Intel & Apple Silicon) & Windows', W/2, 1556, '600 30px -apple-system,sans-serif', '#8b9195', ctaA);
+    const linkA=seg(t,14.1,14.7);
+    pill('github.com/MikeXtremeLED/xtremeled-remap-export', W/2, 1640, 28, 30, 16, '#f7941e', '#241503', linkA);
+    // download hint
+    text('⬇  Download now', W/2, 1720, '800 38px -apple-system,sans-serif', '#ffffff', seg(t,14.4,15.0));
+  }
+}
+
+// deterministic seek for frame capture
+window.__ready = false;
+const readyCheck = setInterval(()=>{ if(iconReady){ window.__ready=true; clearInterval(readyCheck);} }, 30);
+window.__DUR = DUR;
+window.__seek = function(t){
+  return new Promise((res)=>{
+    draw(t);
+    requestAnimationFrame(()=>requestAnimationFrame(res));
+  });
+};
+// live preview when opened directly
+if(!location.search.includes('capture')){
+  let start=null;
+  function loop(ts){ if(start===null)start=ts; let t=((ts-start)/1000)%DUR; draw(t); requestAnimationFrame(loop); }
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>

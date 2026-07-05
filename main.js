@@ -12,6 +12,42 @@ const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
 const makeIconArg = process.argv.find((a) => a.startsWith('--makeicon='));
 const makeHeroArg = process.argv.find((a) => a.startsWith('--makehero='));
 const makePosterArg = process.argv.find((a) => a.startsWith('--makeposter='));
+const makeVideoArg = process.argv.find((a) => a.startsWith('--makevideo='));
+
+// Render tools/promo.html frame-by-frame to a folder of PNGs (1080x1920 @ 30fps)
+function makeVideo() {
+  const outDir = makeVideoArg.slice('--makevideo='.length);
+  fs.mkdirSync(outDir, { recursive: true });
+  const FPS = 30;
+  const w = new BrowserWindow({
+    width: 1080,
+    height: 1920,
+    show: false,
+    frame: false,
+    webPreferences: { offscreen: true },
+  });
+  w.loadFile(path.join(__dirname, 'tools/promo.html'), { query: { capture: '1' } });
+  w.webContents.once('did-finish-load', async () => {
+    // wait for assets (icon) to load
+    for (let i = 0; i < 100; i++) {
+      const ready = await w.webContents.executeJavaScript('window.__ready === true').catch(() => false);
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const dur = await w.webContents.executeJavaScript('window.__DUR').catch(() => 16);
+    const total = Math.round(dur * FPS);
+    console.log(`Rendering ${total} frames (${dur}s @ ${FPS}fps)…`);
+    for (let i = 0; i < total; i++) {
+      const t = i / FPS;
+      await w.webContents.executeJavaScript(`window.__seek(${t})`);
+      const img = await w.webContents.capturePage({ x: 0, y: 0, width: 1080, height: 1920 });
+      fs.writeFileSync(path.join(outDir, `frame_${String(i).padStart(5, '0')}.png`), img.toPNG());
+      if (i % 30 === 0) console.log(`  ${i}/${total}`);
+    }
+    console.log('FRAMES_DONE', total, FPS);
+    app.quit();
+  });
+}
 
 // Capture tools/poster.html (Facebook poster) at 1080x1350
 function makePoster() {
@@ -128,6 +164,7 @@ app.whenReady().then(() => {
   if (makeIconArg) return makeIcon();
   if (makeHeroArg) return makeHero();
   if (makePosterArg) return makePoster();
+  if (makeVideoArg) return makeVideo();
   const iconPng = path.join(__dirname, 'build/icon.png');
   if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
     try {
