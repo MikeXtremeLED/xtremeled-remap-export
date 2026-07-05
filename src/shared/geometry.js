@@ -170,7 +170,8 @@
       bw = IW; bh = IH;
     }
     const sc = (t.scale != null ? t.scale : 100) / 100;
-    bw *= sc; bh *= sc;
+    const scy = (t.scaleY != null ? t.scaleY : t.scale != null ? t.scale : 100) / 100;
+    bw *= sc; bh *= scy;
     const a = ((t.rotation || 0) * Math.PI) / 180;
     const rw = Math.abs(bw * Math.cos(a)) + Math.abs(bh * Math.sin(a));
     const rh = Math.abs(bw * Math.sin(a)) + Math.abs(bh * Math.cos(a));
@@ -181,7 +182,7 @@
 
   function defaultTransform() {
     return {
-      mode: 'stretch', scale: 100, x: 0, y: 0, rotation: 0,
+      mode: 'stretch', scale: 100, scaleY: null, x: 0, y: 0, rotation: 0,
       brightness: 0, contrast: 0, saturation: 1, hue: 0, blur: 0,
     };
   }
@@ -192,6 +193,7 @@
     return (
       (t.mode || 'stretch') === 'stretch' &&
       (t.scale == null || t.scale === d.scale) &&
+      (t.scaleY == null || t.scaleY === (t.scale != null ? t.scale : d.scale)) &&
       !t.x && !t.y && !t.rotation &&
       !t.brightness && !t.contrast &&
       (t.saturation == null || t.saturation === 1) &&

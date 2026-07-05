@@ -72,12 +72,12 @@ select { width: auto; }
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 10px; margin-right: 8px; white-space: nowrap; }
-.brand .logo { display: inline-flex; align-items: center; font-weight: 800; font-size: 15px; color: #b3b7ba; }
-.brand .logo .x { color: var(--accent); font-size: 19px; font-weight: 900; line-height: 1; margin-right: 0; }
+.brand .logo { display: inline-flex; align-items: baseline; font-weight: 800; font-size: 15px; color: #b3b7ba; }
+.brand .logo .x { color: var(--accent); font-size: 20px; font-weight: 900; line-height: 0.9; margin-right: 0; }
 .brand .logo .t { letter-spacing: 0.6px; }
-.brand .led { display: inline-flex; align-items: center; margin-left: 5px; }
-.brand .ebars { display: inline-flex; flex-direction: column; gap: 1.6px; margin: 0 1.6px; }
-.brand .ebars i { display: block; width: 9px; height: 3px; border-radius: 1px; }
+.brand .led { display: inline-flex; align-items: baseline; margin-left: 5px; }
+.brand .ebars { display: inline-flex; flex-direction: column; gap: 1.6px; margin: 0 1.6px; transform: translateY(-1px); }
+.brand .ebars i { display: block; width: 9px; height: 2.8px; border-radius: 1px; }
 .brand .ebars i:nth-child(1) { background: #e8492e; }
 .brand .ebars i:nth-child(2) { background: #4caf50; }
 .brand .ebars i:nth-child(3) { background: #2196f3; }
@@ -254,27 +254,80 @@ select { width: auto; }
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.tl-wrap { position: relative; flex: 1; display: flex; align-items: center; }
-.tl-wrap input[type='range'] { width: 100%; }
-.tl-marker {
+/* Shutter-encoder style trim timeline */
+#rp-timeline { display: block; padding: 8px 14px 10px; }
+.tl-row { display: flex; align-items: center; gap: 8px; }
+.tc { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 86px; }
+#tl-cur { color: var(--accent-hi); }
+#tl-len { text-align: right; }
+#tl-track {
+  position: relative;
+  flex: 1;
+  height: 30px;
+  background: #16181a;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  overflow: hidden;
+}
+#tl-track.disabled { opacity: 0.35; cursor: default; }
+#tl-sel {
   position: absolute;
-  top: -3px;
-  width: 0; height: 0;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  transform: translateX(-6px);
+  top: 0; bottom: 0;
+  background: linear-gradient(180deg, rgba(247,148,30,0.45), rgba(247,148,30,0.25));
+  border-left: 1px solid rgba(247,148,30,0.8);
+  border-right: 1px solid rgba(247,148,30,0.8);
   pointer-events: none;
 }
-.tl-marker.in { border-top: 9px solid #4caf50; }
-.tl-marker.out { border-top: 9px solid var(--danger); }
-#tl-range {
+.tl-h {
   position: absolute;
-  top: 8px;
-  height: 6px;
-  background: rgba(247, 148, 30, 0.25);
-  border-radius: 3px;
-  pointer-events: none;
+  top: 0; bottom: 0;
+  width: 10px;
+  transform: translateX(-5px);
+  cursor: ew-resize;
+  z-index: 3;
 }
+.tl-h::after {
+  content: '';
+  position: absolute;
+  left: 3px; top: 0; bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+}
+.tl-h.in::after { background: #4caf50; }
+.tl-h.out::after { background: var(--danger); }
+#tl-play {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  background: #ffffff;
+  transform: translateX(-1px);
+  pointer-events: none;
+  z-index: 4;
+}
+#tl-play::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -4px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #ffffff;
+}
+.clip-info {
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.6;
+  background: #1a1d1f;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 6px 0;
+  user-select: text;
+}
+.link-btn { padding: 3px 6px; opacity: 0.5; }
+.link-btn.active { opacity: 1; border-color: var(--accent); }
+.drag-over-top { box-shadow: inset 0 2px 0 var(--accent) !important; }
+.drag-over-bottom { box-shadow: inset 0 -2px 0 var(--accent) !important; }
 .file-row input[type='checkbox'] { flex-shrink: 0; }
 #rp-left .left-buttons { grid-template-columns: 1fr 1fr; }
 select optgroup { color: var(--accent); }

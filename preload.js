@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('xre', {
   readFileDataUrl: (p) => ipcRenderer.invoke('file:readDataUrl', p),
   writeFileText: (p, t) => ipcRenderer.invoke('file:writeText', p, t),
   writeTempDataUrl: (name, dataUrl) => ipcRenderer.invoke('file:writeTempDataUrl', name, dataUrl),
+  writeFileDataUrl: (p, dataUrl) => ipcRenderer.invoke('file:writeDataUrl', p, dataUrl),
   showInFolder: (p) => ipcRenderer.invoke('shell:showInFolder', p),
   pathParse: (p) => ipcRenderer.invoke('path:parse', p),
   pathJoin: (...parts) => ipcRenderer.invoke('path:join', ...parts),

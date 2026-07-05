@@ -8,8 +8,9 @@ const path = require('path');
 const Geometry = require('../shared/geometry');
 const Codecs = require('../shared/codecs');
 
-// Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg)
-const bundledDxvFfmpeg = path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv', 'ffmpeg');
+// Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg-<arch>).
+// Native binary per architecture: Intel (x64) and Apple Silicon (arm64).
+const bundledDir = path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv');
 
 let ffmpegStatic = null;
 try {
@@ -25,7 +26,11 @@ let capsCache = null;
 function candidateFfmpegs() {
   const list = [];
   if (process.env.XRE_FFMPEG) list.push(process.env.XRE_FFMPEG);
-  list.push(bundledDxvFfmpeg.replace('app.asar', 'app.asar.unpacked'));
+  const dir = bundledDir.replace('app.asar', 'app.asar.unpacked');
+  const native = process.arch === 'arm64' ? 'ffmpeg-arm64' : 'ffmpeg-x64';
+  list.push(path.join(dir, native));
+  list.push(path.join(dir, 'ffmpeg')); // legacy single-binary name
+  if (process.arch === 'arm64') list.push(path.join(dir, 'ffmpeg-x64')); // Rosetta fallback
   if (ffmpegStatic) list.push(ffmpegStatic);
   list.push('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg');
   return [...new Set(list)].filter((p) => {
@@ -276,9 +281,12 @@ function buildArgs(project, job, opts, probe) {
   }
   for (const m of maskInputs) inputArgs.push('-i', m);
 
+  // GPU (VideoToolbox) applies to moving video; alpha pipeline only via ProRes 4444
+  const gpuOk = !!opts.gpu && (!useAlphaPipeline || opts.codec === 'prores_4444');
+  const encOpts = { ...opts, gpu: gpuOk };
   const codecArgs = isStill && !isSeq
-    ? ['-frames:v', '1', ...Codecs.encoderArgs(opts.codec, opts)]
-    : Codecs.encoderArgs(opts.codec, opts);
+    ? ['-frames:v', '1', ...Codecs.encoderArgs(opts.codec, { ...opts, gpu: false })]
+    : Codecs.encoderArgs(opts.codec, encOpts);
 
   const wantAudio =
     !isStill && !job.isImage && probe && probe.hasAudio && !useAlphaPipeline;
@@ -364,7 +372,7 @@ function send(win, data) {
 
 async function startBatch(win, payload) {
   cancelled = false;
-  const { jobs, codec, alpha, depth, bitrateMbps, fps, imageDuration } = payload;
+  const { jobs, codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu } = payload;
   const ffPath = ffmpegForCodec(codec);
   if (!ffPath) throw new Error('No ffmpeg found for this codec');
 
@@ -378,10 +386,18 @@ async function startBatch(win, payload) {
       // PNG sequence: ensure the output folder exists
       if (job.outDir) fs.mkdirSync(job.outDir, { recursive: true });
       const probe = probeMedia(ffPath, job.src);
-      const { args, durationSec } = buildArgs(project, job, { codec, alpha, depth, bitrateMbps, fps, imageDuration }, probe);
-      await runFfmpeg(ffPath, args, durationSec, (pct) =>
-        send(win, { type: 'progress', index: i, total: jobs.length, percent: pct })
-      );
+      const opts = { codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu };
+      const onPct = (pct) => send(win, { type: 'progress', index: i, total: jobs.length, percent: pct });
+      try {
+        const { args, durationSec } = buildArgs(project, job, opts, probe);
+        await runFfmpeg(ffPath, args, durationSec, onPct);
+      } catch (gpuErr) {
+        // GPU (VideoToolbox) not available on this machine/codec -> retry on CPU
+        if (!gpu || cancelled || !Codecs.gpuCapable(codec)) throw gpuErr;
+        send(win, { type: 'job-note', index: i, total: jobs.length, note: 'GPU encoder unavailable — falling back to CPU', label: job.label });
+        const { args, durationSec } = buildArgs(project, job, { ...opts, gpu: false }, probe);
+        await runFfmpeg(ffPath, args, durationSec, onPct);
+      }
       const shown = job.outDir || job.outPath;
       results.push({ src: job.src, out: shown, ok: true });
       send(win, { type: 'job-done', index: i, total: jobs.length, out: shown, label: job.label });

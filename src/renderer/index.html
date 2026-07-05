@@ -161,6 +161,16 @@
         </div>
 
         <div class="section">
+          <div class="panel-title">Test pattern</div>
+          <div class="note">Generate a test card at input canvas size with grid, circles and slice labels — to verify the mapping on the real LED screen.</div>
+          <div class="row">
+            <button id="tp-preview">Set as reference</button>
+            <button id="tp-save">Save PNG…</button>
+          </div>
+          <div class="row"><button id="tp-export">Send to Export page</button></div>
+        </div>
+
+        <div class="section">
           <div class="panel-title">Engine</div>
           <div id="ffmpeg-info" class="dim">ffmpeg: searching…</div>
         </div>
@@ -190,23 +200,27 @@
         </div>
         <canvas id="rp-canvas"></canvas>
         <div id="rp-timeline">
-          <button id="rp-refresh" title="Refresh preview frame">⟳</button>
-          <button id="rp-set-in" title="Set in point at current time">[ In</button>
-          <div class="tl-wrap">
-            <div id="tl-range"></div>
-            <input type="range" id="rp-time" min="0" max="0" step="0.04" value="0" />
-            <div id="tl-in" class="tl-marker in hidden"></div>
-            <div id="tl-out" class="tl-marker out hidden"></div>
+          <div class="tl-row">
+            <span id="tl-cur" class="tc">00:00:00.00</span>
+            <button id="rp-refresh" title="Refresh preview frame">⟳</button>
+            <button id="rp-set-in" title="Set in point at playhead (I)">[</button>
+            <div id="tl-track">
+              <div id="tl-sel"></div>
+              <div id="tl-in-h" class="tl-h in" title="In point — drag to move"></div>
+              <div id="tl-out-h" class="tl-h out" title="Out point — drag to move"></div>
+              <div id="tl-play"></div>
+            </div>
+            <button id="rp-set-out" title="Set out point at playhead (O)">]</button>
+            <button id="rp-clear-trim" title="Clear in/out points">✕</button>
+            <span id="tl-len" class="tc dim">—</span>
           </div>
-          <button id="rp-set-out" title="Set out point at current time">Out ]</button>
-          <button id="rp-clear-trim" title="Clear in/out points">✕</button>
-          <span id="rp-timelabel" class="dim">0.00 s</span>
         </div>
       </div>
 
       <aside id="rp-right">
         <div class="section" id="rp-clip-section">
           <div class="panel-title">Clip — <span id="rp-clip-name" class="dim">no selection</span></div>
+          <div id="ct-info" class="clip-info"></div>
           <div class="row">
             <label>Fit</label>
             <select id="ct-mode">
@@ -220,7 +234,18 @@
             <label style="width:56px">Pos X</label><input type="number" id="ct-x" class="num" value="0" />
             <label style="width:14px">Y</label><input type="number" id="ct-y" class="num" value="0" />
           </div>
-          <div class="row slider-row"><label>Scale</label><input type="range" id="ct-scale" min="1" max="400" value="100" data-default="100" /><input type="number" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span></div>
+          <div class="row slider-row">
+            <label id="ct-scale-label">Scale</label>
+            <input type="range" id="ct-scale" min="1" max="400" value="100" data-default="100" />
+            <input type="number" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span>
+            <button id="ct-link" class="link-btn active" title="Link W/H scale">🔗</button>
+          </div>
+          <div class="row slider-row hidden" id="ct-scaley-row">
+            <label>Scale H</label>
+            <input type="range" id="ct-scaley" min="1" max="400" value="100" data-default="100" />
+            <input type="number" id="ct-scaley-n" class="num" value="100" /><span class="dim">%</span>
+          </div>
+          <div class="row"><span id="ct-pixels" class="dim"></span></div>
           <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" data-default="0" /><input type="number" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
 
           <div class="subtitle">Color <span class="dim">(right-click a slider = reset)</span></div>
@@ -264,6 +289,11 @@
           <div class="row">
             <button id="r-same-as-source" title="Match codec, bit depth and bitrate of the selected footage">Remap same as source</button>
           </div>
+          <div class="row">
+            <label style="min-width:auto">GPU acceleration (VideoToolbox)</label>
+            <input type="checkbox" id="r-gpu" />
+          </div>
+          <div class="note">Uses the Mac's hardware encoder for ProRes / HEVC / H.264. Falls back to CPU automatically when unavailable.</div>
           <div id="r-codec-note" class="note"></div>
           <div class="row2" id="r-still-row">
             <label style="width:80px">Still FPS</label><input type="number" id="r-fps" class="num" value="50" min="1" max="240" />

@@ -62,9 +62,36 @@
     return out;
   }
 
-  // ffmpeg encoder args for a codec + options {alpha, depth, bitrateMbps, fps}
+  // Codecs that have a VideoToolbox (GPU) encoder variant
+  function gpuCapable(codecId) {
+    return ['prores_proxy', 'prores_lt', 'prores_422', 'prores_hq', 'prores_4444', 'hevc', 'h264'].includes(codecId);
+  }
+
+  // ffmpeg encoder args for a codec + options {alpha, depth, bitrateMbps, fps, gpu}
   function encoderArgs(codecId, opt) {
     const alpha = opt.alpha || 'none';
+    if (opt.gpu && gpuCapable(codecId)) {
+      switch (codecId) {
+        case 'prores_proxy':
+        case 'prores_lt':
+        case 'prores_422':
+        case 'prores_hq': {
+          const profile = { prores_proxy: 'proxy', prores_lt: 'lt', prores_422: 'standard', prores_hq: 'hq' }[codecId];
+          return ['-c:v', 'prores_videotoolbox', '-profile:v', profile];
+        }
+        case 'prores_4444':
+          return alpha === 'straight'
+            ? ['-c:v', 'prores_videotoolbox', '-profile:v', '4444', '-pix_fmt', 'bgra', '-alpha_quality', '0.9']
+            : ['-c:v', 'prores_videotoolbox', '-profile:v', '4444'];
+        case 'hevc': {
+          const args = ['-c:v', 'hevc_videotoolbox', '-b:v', `${opt.bitrateMbps || 25}M`, '-tag:v', 'hvc1'];
+          if ((opt.depth || 8) >= 10) args.push('-profile:v', 'main10', '-pix_fmt', 'p010le');
+          return args;
+        }
+        case 'h264':
+          return ['-c:v', 'h264_videotoolbox', '-b:v', `${opt.bitrateMbps || 20}M`];
+      }
+    }
     switch (codecId) {
       case 'prores_proxy':
       case 'prores_lt':
@@ -108,5 +135,5 @@
     }
   }
 
-  return { CODECS, byId, matchSource, encoderArgs };
+  return { CODECS, byId, matchSource, encoderArgs, gpuCapable };
 });

@@ -25,10 +25,14 @@ npm start          # or double-click "XtremeLED Remap Export.command"
 - **Split rows** — cut a wide slice (e.g. a 50m×1m screen) into rows on the output canvas, with live summary of what you'll get.
 - **Undo / redo** — ⌘Z / ⇧⌘Z or the toolbar buttons.
 - **Reference images** — underlay for the Input Map; the Output Map shows a live preview of the mapped content.
-- **Multiple screens (outputs)** — manage screens in the Project panel; each slice is assigned to a screen; exports produce one file per screen.
+- **Multiple screens (outputs)** — manage screens in the Project panel; each slice is assigned to a screen. On export you choose: separate file per screen, one merged video (screens side by side), or both.
+- **Test pattern** — generate a test card (grid, circles, slice labels) from the Mapping page: set as reference, save as PNG, or send to the Export page to render in any codec.
 - **Export page** — full-page workflow:
   - Footage list with per-file selection checkboxes; **test pattern generator** (renders slice names/grid at input canvas size); **watch folder** with auto-export of new files.
-  - Per clip: **transform** (fit mode, position, scale, rotation) and **color** (brightness, contrast, saturation, hue, blur) with live preview — Input *and* Output view — plus a timeline scrubber with **in/out trim markers** (keys: I / O).
+  - Per clip: full **info** (resolution, codec, duration, fps, bitrate), **transform** (fit mode, position, linked or separate W/H scale with pixel readout, rotation) and **color** with live preview — Input *and* Output view. Drag the clip directly in the preview (snaps to canvas edges/center).
+  - Trim timeline with draggable **in/out handles** and playhead (keys: I / O), Shutter Encoder-style.
+  - **GPU acceleration** (VideoToolbox) for ProRes/HEVC/H.264 with automatic CPU fallback.
+  - The footage list (with per-file checkboxes) is saved inside the project; drag rows to reorder — slices in the Mapping page reorder the same way.
   - **Codecs**: ProRes 422 Proxy/LT/422/HQ, ProRes 4444 (with/only alpha), DXV3, HAP Standard/Q (HAP alpha), HEVC/H.265 (8/10/12-bit, bitrate), H.264, PNG still (8/16-bit) and PNG sequence (written into its own folder). Codec name is part of the output filename.
   - **Remap same as source** matches codec, bit depth and bitrate of the source footage.
   - Right-click any slider to reset it to its default (like Resolume).
@@ -57,6 +61,10 @@ npx electron-builder --mac
 ```
 
 The app icon lives in `build/icon.icns` (regenerate with `npx electron . --makeicon=build/icon.png` + `iconutil`). For Windows later: `npx electron-builder --win`.
+
+## Intel & Apple Silicon
+
+The app bundles native ffmpeg binaries for both architectures (`bin/ffmpeg-dxv/ffmpeg-x64` and `ffmpeg-arm64`); the right one is picked automatically. On Apple Silicon the x64 binary also works via Rosetta as fallback.
 
 ## Notes
 

@@ -142,6 +142,14 @@ ipcMain.handle('file:writeText', (e, p, text) => {
   return true;
 });
 
+// Write a dataURL to an arbitrary path (e.g. save test pattern PNG)
+ipcMain.handle('file:writeDataUrl', (e, p, dataUrl) => {
+  const m = String(dataUrl).match(/^data:[^;]+;base64,(.+)$/s);
+  if (!m) throw new Error('Invalid dataURL');
+  fs.writeFileSync(p, Buffer.from(m[1], 'base64'));
+  return true;
+});
+
 // Write a dataURL (e.g. rasterized mask / test pattern PNG) to a temp file, returns the path
 ipcMain.handle('file:writeTempDataUrl', (e, name, dataUrl) => {
   const m = String(dataUrl).match(/^data:[^;]+;base64,(.+)$/s);

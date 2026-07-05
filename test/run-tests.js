@@ -264,9 +264,55 @@ const frame = render.extractFrame(srcPng, 0);
 assert(frame.startsWith('data:image/png;base64,') && frame.length > 1000);
 ok('preview frame extracted');
 
-[srcPng, srcVid, srcSq, outMov, outDxv, outHap, outHevc, outPng, outPng16, outTrim, outTr, outA, outB].forEach((f) => {
-  try { fs.unlinkSync(f); } catch (e) { /* gone */ }
-});
-fs.rmSync(seqDir, { recursive: true, force: true });
+// ---------- 14) separate W/H scale ----------
+console.log('Test 14: separate W/H scale');
+const layLinked = G.clipLayout(1000, 500, { mode: 'native', scale: 100 }, 2000, 1000);
+const layUnlinked = G.clipLayout(1000, 500, { mode: 'native', scale: 100, scaleY: 50 }, 2000, 1000);
+assert.strictEqual(Math.round(layLinked.bh), 500);
+assert.strictEqual(Math.round(layUnlinked.bh), 250);
+assert.strictEqual(Math.round(layUnlinked.bw), 1000);
+assert(!G.isIdentityTransform({ mode: 'stretch', scale: 100, scaleY: 50 }));
+ok('scaleY scales height independently');
 
-console.log(`\nALL ${passed} CHECKS PASSED`);
+// ---------- 15) merged output (screens side by side) ----------
+console.log('Test 15: merged multi-screen output');
+const mergedProj = {
+  name: 'merged', input: msProj.input,
+  screens: [{ id: 'merged', name: 'Merged', width: 1920 + 800, height: 1080 }],
+  slices: msProj.slices.map((s, i) => {
+    const c = JSON.parse(JSON.stringify(s));
+    if (s.screenId === 'b') c.out.x += 1920;
+    c.screenId = 'merged';
+    return c;
+  }),
+};
+const outMerged = path.join(tmp, 'xre-test-merged.mov');
+b = render.buildArgs(mergedProj, { src: srcSq, isImage: true, outPath: outMerged, screen: mergedProj.screens[0] }, { codec: 'prores_proxy', fps: 5, imageDuration: 1 }, null);
+run = spawnSync(caps.proresPath, b.args, { encoding: 'utf8', timeout: 120000 });
+assert.strictEqual(run.status, 0, (run.stderr || '').slice(-2000));
+assert(/2720x1080/.test(probeInfo(caps.proresPath, outMerged)));
+ok('merged canvas 2720x1080 renders');
+
+// ---------- 16) GPU (VideoToolbox) with CPU fallback ----------
+(async () => {
+  console.log('Test 16: GPU encode with automatic CPU fallback');
+  const outGpu = path.join(tmp, 'xre-test-gpu.mov');
+  const gpuResults = await render.startBatch(null, {
+    project: p,
+    jobs: [{ src: srcPng, isImage: true, outPath: outGpu }],
+    codec: 'prores_hq', alpha: 'none', depth: 10, fps: 5, imageDuration: 1, gpu: true,
+  });
+  assert(gpuResults[0].ok, 'gpu or fallback render ok: ' + JSON.stringify(gpuResults[0]));
+  assert(/prores/i.test(probeInfo(caps.proresPath, outGpu)));
+  ok('GPU path renders ProRes (or falls back to CPU cleanly)');
+
+  [srcPng, srcVid, srcSq, outMov, outDxv, outHap, outHevc, outPng, outPng16, outTrim, outTr, outA, outB, outMerged, outGpu].forEach((f) => {
+    try { fs.unlinkSync(f); } catch (e) { /* gone */ }
+  });
+  fs.rmSync(seqDir, { recursive: true, force: true });
+
+  console.log(`\nALL ${passed} CHECKS PASSED`);
+})().catch((e) => {
+  console.error('FAILED:', e);
+  process.exit(1);
+});

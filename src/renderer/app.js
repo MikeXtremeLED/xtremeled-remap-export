@@ -38,9 +38,6 @@ const HANDLE_CURSORS = {
 };
 
 // ---------------- helpers ----------------
-function screens() {
-  return project.screens;
-}
 function activeScreen() {
   return project.screens.find((s) => s.id === activeScreenId) || project.screens[0];
 }
@@ -82,6 +79,46 @@ function sanitizeName(s) {
 function maskUsable(s) {
   return s.mask && s.mask.enabled && s.mask.points && s.mask.points.length >= 3;
 }
+function fmtTC(sec) {
+  sec = Math.max(0, sec || 0);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
+// generic drag-to-reorder for list rows
+function enableReorder(rowEl, index, onMove) {
+  rowEl.draggable = true;
+  rowEl.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', String(index));
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  rowEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const r = rowEl.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    rowEl.classList.toggle('drag-over-top', before);
+    rowEl.classList.toggle('drag-over-bottom', !before);
+  });
+  rowEl.addEventListener('dragleave', () => rowEl.classList.remove('drag-over-top', 'drag-over-bottom'));
+  rowEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    rowEl.classList.remove('drag-over-top', 'drag-over-bottom');
+    const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+    if (Number.isNaN(from)) return;
+    const r = rowEl.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    onMove(from, index + (before ? 0 : 1));
+  });
+}
+function moveItem(arr, from, to) {
+  if (from < to) to--;
+  if (from === to || from < 0 || from >= arr.length) return false;
+  const [it] = arr.splice(from, 1);
+  arr.splice(to, 0, it);
+  return true;
+}
 
 // ---------------- undo / redo ----------------
 const history = { undo: [], redo: [] };
@@ -106,6 +143,7 @@ async function restoreSnapshot(json) {
   if (selId && !project.slices.some((s) => s.id === selId)) selId = null;
   if (!project.screens.some((s) => s.id === activeScreenId)) activeScreenId = project.screens[0].id;
   await loadAllRefs();
+  loadExportListFromProject();
   refreshAll();
   markDirty();
 }
@@ -141,6 +179,7 @@ function newProject() {
     input: { width: 3840, height: 2160 },
     screens: [{ id: scrId, name: 'Output #1', width: 3840, height: 2160 }],
     refs: { input: null, output: null },
+    exportList: [],
     slices: [
       newSliceDefaults({
         id: uid(), name: 'Slice 1', screenId: scrId,
@@ -184,6 +223,7 @@ function demoProject() {
       input: { dataUrl: checkerDataUrl(2600, 104, 26), name: 'demo test card', opacity: 0.9 },
       output: null,
     },
+    exportList: [],
     slices: [
       newSliceDefaults({ id: uid(), name: '50x2m part 1/3', screenId: scrId, in: { x: 0, y: 0, w: 3744, h: 416 }, out: { x: 0, y: 0, w: 3744, h: 416 } }),
       newSliceDefaults({ id: uid(), name: '50x2m part 2/3', screenId: scrId, in: { x: 3744, y: 0, w: 3744, h: 416 }, out: { x: 0, y: 416, w: 3744, h: 416 } }),
@@ -194,18 +234,17 @@ function demoProject() {
 
 function migrateProject(p) {
   if (!p || !p.input || !Array.isArray(p.slices)) throw new Error('Invalid project file');
-  // v1 -> v2: single output -> screens[]
   if (!p.screens || !p.screens.length) {
     const out = p.output || { width: 1920, height: 1080 };
     p.screens = [{ id: 'scr' + Math.random().toString(36).slice(2, 7), name: 'Output #1', width: out.width, height: out.height }];
   }
   delete p.output;
   p.refs = p.refs || { input: null, output: null };
+  p.exportList = p.exportList || [];
   p.slices = p.slices.map((s) => newSliceDefaults(s));
   p.slices.forEach((s) => {
     if (!s.id) s.id = uid();
     if (!s.screenId || !p.screens.some((sc) => sc.id === s.screenId)) s.screenId = p.screens[0].id;
-    // v1 rect mask -> polygon points
     if (s.mask && !s.mask.points && s.mask.w > 0 && s.mask.h > 0) {
       s.mask = { enabled: s.mask.enabled !== false, points: Geometry.rectToPoints(s.mask) };
     }
@@ -311,8 +350,6 @@ function drawCheckerBg(g, cx, cy, cwid, chei) {
   }
 }
 
-// Draw content of a slice (from a source image covering the input canvas) into its place rect.
-// t: view transform, kx/ky: image px per input-canvas px
 function drawSliceContent(g, img, eff, t, kx, ky) {
   const { crop, place, rot, flip } = eff;
   const s = eff.slice;
@@ -389,7 +426,6 @@ function draw() {
   ctx.lineWidth = 1;
   ctx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
-  // slices
   for (const s of visibleSlices(view)) {
     const r = sliceRect(s, view);
     const x = toScreenX(r.x), y = toScreenY(r.y);
@@ -407,11 +443,9 @@ function draw() {
     ctx.lineWidth = isSel ? 2 : 1;
     ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
 
-    // input mask polygon (input view only)
     if (view === 'input' && maskUsable(s)) {
       const pts = maskScreenPoints(s);
       ctx.save();
-      // darken the part of the slice outside the mask polygon
       ctx.beginPath();
       ctx.rect(x, y, w, h);
       pts.slice().reverse().forEach((p, i) => {
@@ -420,7 +454,6 @@ function draw() {
       ctx.closePath();
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fill('evenodd');
-      // polygon outline
       ctx.beginPath();
       pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.closePath();
@@ -429,7 +462,6 @@ function draw() {
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.setLineDash([]);
-      // key points in mask-edit mode
       if (isSel && maskEdit) {
         pts.forEach((p) => {
           ctx.beginPath();
@@ -443,7 +475,6 @@ function draw() {
       ctx.restore();
     }
 
-    // label pill
     if (w > 40 && h > 14) {
       const label = s.name;
       const extras = [];
@@ -471,7 +502,6 @@ function draw() {
     }
   }
 
-  // handles on selection (slice rect; hidden in mask-edit mode)
   const sel = selected();
   if (sel && !maskEditActive()) {
     const r = sliceRect(sel, view);
@@ -586,7 +616,6 @@ function applyResize(r0, k, dx, dy) {
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
 }
 
-// insert a mask point on the closest polygon edge to (wx, wy)
 function insertMaskPoint(s, wx, wy) {
   const pts = s.mask.points;
   let best = { d: Infinity, idx: 0, x: wx, y: wy };
@@ -614,7 +643,6 @@ function onMouseDown(e) {
     return;
   }
 
-  // mask-edit: right-click on a point removes it
   if (e.button === 2 && maskEditActive()) {
     const idx = maskPointAt(px, py);
     const sel = selected();
@@ -781,7 +809,7 @@ function refreshSliceList() {
   const scroll = list.scrollTop;
   list.innerHTML = '';
   const multi = project.screens.length > 1;
-  for (const s of project.slices) {
+  project.slices.forEach((s, idx) => {
     const item = document.createElement('div');
     item.className = 'slice-item' + (s.id === selId ? ' selected' : '') + (s.enabled === false ? ' off' : '');
     const cb = document.createElement('input');
@@ -822,8 +850,16 @@ function refreshSliceList() {
       refreshProps();
       draw();
     });
+    enableReorder(item, idx, (from, to) => {
+      pushHistory();
+      if (moveItem(project.slices, from, to)) {
+        refreshSliceList();
+        draw();
+        markDirty();
+      }
+    });
     list.appendChild(item);
-  }
+  });
   list.scrollTop = scroll;
 }
 
@@ -924,6 +960,7 @@ function refreshAll() {
   refreshSliceList();
   refreshProps();
   draw();
+  refreshFileList();
   drawRenderPreview();
 }
 
@@ -1112,9 +1149,140 @@ function openSplitModal() {
   };
 }
 
+// Ask how to export multiple screens: separate / merged / both
+function askOutputMode() {
+  return new Promise((resolve) => {
+    const remembered = localStorage.getItem('xre:outmode') || 'separate';
+    openModal(`
+      <div class="modal" style="width:430px">
+        <div class="modal-head">Multiple outputs<button class="close-x" id="m-close">✕</button></div>
+        <div class="modal-body">
+          <div class="note">This project has ${project.screens.length} screens. How do you want to export them?</div>
+          <div class="radio-col">
+            <label><input type="radio" name="m-outmode" value="separate" ${remembered === 'separate' ? 'checked' : ''} /> Separate file per screen</label>
+            <label><input type="radio" name="m-outmode" value="merged" ${remembered === 'merged' ? 'checked' : ''} /> One merged video (screens side by side)</label>
+            <label><input type="radio" name="m-outmode" value="both" ${remembered === 'both' ? 'checked' : ''} /> Both</label>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="m-cancel">Cancel</button>
+          <button id="m-apply" class="accent">Export</button>
+        </div>
+      </div>
+    `);
+    const done = (val) => {
+      closeModal();
+      if (val) localStorage.setItem('xre:outmode', val);
+      resolve(val);
+    };
+    $('m-close').onclick = () => done(null);
+    $('m-cancel').onclick = () => done(null);
+    $('m-apply').onclick = () => done(document.querySelector('input[name="m-outmode"]:checked').value);
+  });
+}
+
+// ---------------- test pattern ----------------
+function makeTestPatternCanvas() {
+  const IW = project.input.width, IH = project.input.height;
+  const k = Math.min(1, 16384 / Math.max(IW, IH));
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(IW * k));
+  c.height = Math.max(2, Math.round(IH * k));
+  const g = c.getContext('2d');
+
+  // checker background
+  const cell = Math.max(10, Math.round(50 * k));
+  for (let y = 0, j = 0; y < c.height; y += cell, j++) {
+    for (let x = 0, i = 0; x < c.width; x += cell, i++) {
+      g.fillStyle = (i + j) % 2 ? '#26292d' : '#33373c';
+      g.fillRect(x, y, cell, cell);
+    }
+  }
+  // 100px grid, stronger every 500px
+  for (let x = 0; x <= IW; x += 100) {
+    g.strokeStyle = x % 500 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x * k, 0); g.lineTo(x * k, c.height); g.stroke();
+  }
+  for (let y = 0; y <= IH; y += 100) {
+    g.strokeStyle = y % 500 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
+    g.beginPath(); g.moveTo(0, y * k); g.lineTo(c.width, y * k); g.stroke();
+  }
+
+  const colors = ['#f7941e', '#35e0b2', '#4fa3ff', '#e85dd0', '#ffd028', '#7fe860'];
+  project.slices.forEach((s, i) => {
+    if (s.enabled === false) return;
+    const col = colors[i % colors.length];
+    const x = s.in.x * k, y = s.in.y * k, w = s.in.w * k, h = s.in.h * k;
+    g.strokeStyle = col;
+    g.lineWidth = Math.max(1.5, 3 * k);
+    g.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    g.beginPath();
+    g.moveTo(x, y); g.lineTo(x + w, y + h);
+    g.moveTo(x + w, y); g.lineTo(x, y + h);
+    g.stroke();
+    g.beginPath();
+    g.arc(x + w / 2, y + h / 2, Math.max(4, Math.min(w, h) / 2 - 2), 0, Math.PI * 2);
+    g.stroke();
+
+    // label pill that always fits inside the slice
+    const label = `${i + 1} · ${s.name} · ${s.in.w}×${s.in.h}`;
+    let fs = Math.min(h * 0.28, 64 * Math.max(k, 0.5), w * 0.5);
+    fs = Math.max(9, fs);
+    g.font = `bold ${fs}px -apple-system, sans-serif`;
+    while (fs > 9 && g.measureText(label).width > w * 0.85) {
+      fs *= 0.92;
+      g.font = `bold ${fs}px -apple-system, sans-serif`;
+    }
+    const tw = g.measureText(label).width;
+    const pw = tw + fs * 1.2, ph = fs * 1.7;
+    g.fillStyle = 'rgba(8,10,12,0.82)';
+    g.fillRect(x + w / 2 - pw / 2, y + h / 2 - ph / 2, pw, ph);
+    g.fillStyle = '#ffffff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(label, x + w / 2, y + h / 2 + fs * 0.05);
+  });
+  return c;
+}
+
+async function addTestPattern() {
+  try {
+    const c = makeTestPatternCanvas();
+    const p = await api.writeTempDataUrl(`testpattern-${sanitizeName(project.name)}.png`, c.toDataURL('image/png'));
+    if (page !== 'render') switchPage('render');
+    await addFootage([p], { select: true });
+  } catch (e) {
+    alert('Test pattern failed: ' + (e.message || e));
+  }
+}
+
+async function testPatternAsReference() {
+  pushHistory();
+  const c = makeTestPatternCanvas();
+  project.refs.input = { dataUrl: c.toDataURL('image/png'), name: 'test pattern', opacity: 0.9 };
+  await loadRefImage('input');
+  if (view !== 'input') switchView('input');
+  refreshRefPanel();
+  draw();
+  markDirty();
+}
+
+async function saveTestPattern() {
+  const p = await api.saveDialog({
+    title: 'Save test pattern PNG',
+    defaultPath: `testpattern-${sanitizeName(project.name)}-${project.input.width}x${project.input.height}.png`,
+    filters: [{ name: 'PNG', extensions: ['png'] }],
+  });
+  if (!p) return;
+  const c = makeTestPatternCanvas();
+  await api.writeFileDataUrl(p, c.toDataURL('image/png'));
+  api.showInFolder(p);
+}
+
 // ---------------- export page ----------------
 const rp = {
-  files: [], // {path, isImage, probe, transform, frameImg, frameTime, selected, inSec, outSec}
+  files: [], // {path, isImage, probe, transform, frameImg, frameTime, curTime, selected, inSec, outSec}
   activeIndex: -1,
   destDir: null,
   running: false,
@@ -1127,15 +1295,65 @@ const rp = {
 };
 let rpCanvas, rpCtx;
 let frameTimer = null;
+let rpDrag = null; // clip dragging / timeline dragging
 
 function activeFile() {
   return rp.files[rp.activeIndex] || null;
 }
 
+function syncExportList() {
+  project.exportList = rp.files.map((f) => ({
+    path: f.path,
+    transform: f.transform,
+    inSec: f.inSec,
+    outSec: f.outSec,
+    selected: f.selected !== false,
+  }));
+  markDirty();
+}
+
+function loadExportListFromProject() {
+  const list = project.exportList || [];
+  rp.files = list.map((e) => ({
+    path: e.path,
+    isImage: isImagePath(e.path),
+    probe: null,
+    transform: Object.assign(Geometry.defaultTransform(), e.transform || {}),
+    frameImg: null,
+    frameTime: 0,
+    curTime: 0,
+    selected: e.selected !== false,
+    inSec: e.inSec != null ? e.inSec : null,
+    outSec: e.outSec != null ? e.outSec : null,
+  }));
+  rp.activeIndex = rp.files.length ? 0 : -1;
+  refreshFileList();
+  refreshClipControls();
+  // probe async, refresh as results come in
+  rp.files.forEach(async (f) => {
+    try {
+      f.probe = await api.previewProbe(f.path);
+    } catch (e) {
+      f.probe = null;
+    }
+    refreshFileList();
+    if (activeFile() === f) {
+      refreshClipControls();
+      layoutTimeline();
+      fetchFrame(true);
+    }
+  });
+  if (rp.files.length) selectFile(0);
+  else {
+    layoutTimeline();
+    drawRenderPreview();
+  }
+}
+
 function resizeRenderCanvas() {
   if (!rpCanvas) return;
   const rect = rpCanvas.parentElement.getBoundingClientRect();
-  const tlH = ($('rp-timeline') ? $('rp-timeline').offsetHeight : 36) + ($('rp-viewbar') ? $('rp-viewbar').offsetHeight : 34);
+  const tlH = ($('rp-timeline') ? $('rp-timeline').offsetHeight : 46) + ($('rp-viewbar') ? $('rp-viewbar').offsetHeight : 34);
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.max(50, rect.width);
   const ch = Math.max(50, rect.height - tlH);
@@ -1145,6 +1363,7 @@ function resizeRenderCanvas() {
   rpCanvas.height = Math.round(ch * dpr);
   rpCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fitRenderView();
+  layoutTimeline();
   drawRenderPreview();
 }
 
@@ -1177,7 +1396,6 @@ function clipFilterString(tr, scalePx) {
   return filters.join(' ') || 'none';
 }
 
-// Draw the transformed clip into a context whose world = input canvas (scale factor k px/world-px)
 function drawClipInto(g, f, IW, IH, k) {
   const tr = f.transform;
   const lay = Geometry.clipLayout(f.probe.width, f.probe.height, tr, IW, IH);
@@ -1190,7 +1408,6 @@ function drawClipInto(g, f, IW, IH, k) {
   g.filter = 'none';
 }
 
-// Offscreen composite of the input canvas with the active clip (for the output preview)
 function buildInputComposite(f) {
   const IW = project.input.width, IH = project.input.height;
   const maxW = 2048;
@@ -1238,11 +1455,10 @@ function drawRenderPreview() {
       rpCtx.restore();
     }
   } else {
-    // output view: composite input canvas, then map through slices
     const scr = project.screens.find((s) => s.id === rp.screenId) || project.screens[0];
     const comp = buildInputComposite(f);
     for (const eff of Geometry.effectiveSlices(project, scr.id)) {
-      drawSliceContentRP(rpCtx, comp.canvas, eff, t, comp.k, comp.k);
+      drawSliceContent(rpCtx, comp.canvas, eff, { scale: t.scale, ox: t.ox, oy: t.oy }, comp.k, comp.k);
     }
   }
   rpCtx.restore();
@@ -1250,7 +1466,6 @@ function drawRenderPreview() {
   rpCtx.strokeStyle = '#42484c';
   rpCtx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
-  // slice outlines
   if (rp.viewMode === 'input') {
     for (const sl of project.slices) {
       if (sl.enabled === false) continue;
@@ -1291,17 +1506,12 @@ function drawRenderPreview() {
   }
 }
 
-// same as drawSliceContent but with rp transform
-function drawSliceContentRP(g, img, eff, t, kx, ky) {
-  drawSliceContent(g, img, eff, { scale: t.scale, ox: t.ox, oy: t.oy }, kx, ky);
-}
-
 function refreshFileList() {
   const list = $('rp-files');
   if (!list) return;
   list.innerHTML = '';
   if (!rp.files.length) {
-    list.innerHTML = '<div class="file-empty">Add stageview footage (image or video), or drop files here.</div>';
+    list.innerHTML = '<div class="file-empty">Add stageview footage (image or video), or drop files here. Drag rows to reorder.</div>';
   }
   rp.files.forEach((f, i) => {
     const row = document.createElement('div');
@@ -1315,6 +1525,7 @@ function refreshFileList() {
     cb.addEventListener('change', () => {
       f.selected = cb.checked;
       updateStartButton();
+      syncExportList();
     });
     const tag = document.createElement('span');
     tag.className = 'tag';
@@ -1328,6 +1539,14 @@ function refreshFileList() {
     sz.textContent = f.probe && f.probe.width ? `${f.probe.width}×${f.probe.height}` : '';
     row.append(cb, tag, nm, sz);
     row.onclick = () => selectFile(i);
+    enableReorder(row, i, (from, to) => {
+      const act = activeFile();
+      if (moveItem(rp.files, from, to)) {
+        rp.activeIndex = rp.files.indexOf(act);
+        refreshFileList();
+        syncExportList();
+      }
+    });
     list.appendChild(row);
   });
   updateStartButton();
@@ -1349,6 +1568,7 @@ async function addFootage(paths, opts) {
       transform: Geometry.defaultTransform(),
       frameImg: null,
       frameTime: 0,
+      curTime: 0,
       selected: true,
       inSec: null,
       outSec: null,
@@ -1366,6 +1586,7 @@ async function addFootage(paths, opts) {
     rp.destDir = pp.dir;
     $('r-dest').textContent = rp.destDir;
   }
+  syncExportList();
   if ((rp.activeIndex < 0 || (opts && opts.select)) && firstNew >= 0) {
     selectFile(firstNew);
   } else {
@@ -1379,54 +1600,98 @@ function selectFile(i) {
   const f = activeFile();
   refreshFileList();
   refreshClipControls();
-  refreshTrimUI();
-  if (f) {
-    const dur = f.probe && f.probe.durationSec ? f.probe.durationSec : 0;
-    $('rp-time').max = f.isImage ? 0 : Math.max(0, dur - 0.05).toFixed(2);
-    $('rp-time').value = Math.min(f.frameTime || 0, parseFloat($('rp-time').max) || 0);
-    $('rp-time').disabled = f.isImage;
-    updateTimeLabel();
-    fetchFrame(true);
-  }
+  layoutTimeline();
+  if (f) fetchFrame(true);
   drawRenderPreview();
 }
 
-function updateTimeLabel() {
-  const f = activeFile();
-  let txt = `${(parseFloat($('rp-time').value) || 0).toFixed(2)} s`;
-  if (f && (f.inSec != null || f.outSec != null)) {
-    txt += `  [${f.inSec != null ? f.inSec.toFixed(2) : '0'} → ${f.outSec != null ? f.outSec.toFixed(2) : 'end'}]`;
-  }
-  $('rp-timelabel').textContent = txt;
+// ---------------- timeline (trim UI) ----------------
+function fileDuration(f) {
+  return f && f.probe && f.probe.durationSec ? f.probe.durationSec : 0;
 }
 
-function refreshTrimUI() {
+function layoutTimeline() {
   const f = activeFile();
-  const dur = f && f.probe && f.probe.durationSec ? f.probe.durationSec : 0;
-  const wrap = document.querySelector('.tl-wrap');
-  const inM = $('tl-in'), outM = $('tl-out'), rangeBar = $('tl-range');
-  const isVid = f && !f.isImage && dur > 0;
-  ['rp-set-in', 'rp-set-out', 'rp-clear-trim'].forEach((id) => ($(id).disabled = !isVid));
-  if (!isVid) {
-    inM.classList.add('hidden');
-    outM.classList.add('hidden');
-    rangeBar.style.width = '0';
-    return;
+  const track = $('tl-track');
+  if (!track) return;
+  const dur = fileDuration(f);
+  const usable = f && !f.isImage && dur > 0.01;
+  track.classList.toggle('disabled', !usable);
+  ['rp-set-in', 'rp-set-out', 'rp-clear-trim'].forEach((id) => ($(id).disabled = !usable));
+  const w = track.getBoundingClientRect().width || 1;
+  const px = (sec) => Math.max(0, Math.min(1, dur ? sec / dur : 0)) * w;
+  const inSec = usable && f.inSec != null ? f.inSec : 0;
+  const outSec = usable && f.outSec != null ? f.outSec : dur;
+  $('tl-in-h').style.left = px(inSec) + 'px';
+  $('tl-out-h').style.left = px(outSec) + 'px';
+  $('tl-sel').style.left = px(inSec) + 'px';
+  $('tl-sel').style.width = Math.max(0, px(outSec) - px(inSec)) + 'px';
+  $('tl-play').style.left = px(usable ? (f.curTime || 0) : 0) + 'px';
+  $('tl-in-h').style.display = usable ? '' : 'none';
+  $('tl-out-h').style.display = usable ? '' : 'none';
+  $('tl-play').style.display = usable ? '' : 'none';
+  $('tl-sel').style.display = usable ? '' : 'none';
+  $('tl-cur').textContent = fmtTC(usable ? f.curTime || 0 : 0);
+  if (usable) {
+    const trimmed = (f.inSec != null || f.outSec != null);
+    $('tl-len').textContent = trimmed
+      ? `${fmtTC(inSec)} → ${fmtTC(outSec)} · ${(outSec - inSec).toFixed(2)}s of ${dur.toFixed(2)}s`
+      : `length ${dur.toFixed(2)}s`;
+  } else {
+    $('tl-len').textContent = f && f.isImage ? 'still image' : '—';
   }
-  const w = wrap.getBoundingClientRect().width;
-  const px = (sec) => Math.max(0, Math.min(1, sec / dur)) * w;
-  if (f.inSec != null) {
-    inM.classList.remove('hidden');
-    inM.style.left = px(f.inSec) + 'px';
-  } else inM.classList.add('hidden');
-  if (f.outSec != null) {
-    outM.classList.remove('hidden');
-    outM.style.left = px(f.outSec) + 'px';
-  } else outM.classList.add('hidden');
-  const a = f.inSec != null ? px(f.inSec) : 0;
-  const b = f.outSec != null ? px(f.outSec) : w;
-  rangeBar.style.left = a + 'px';
-  rangeBar.style.width = Math.max(0, b - a) + 'px';
+}
+
+function timelineSecFromEvent(e) {
+  const f = activeFile();
+  const track = $('tl-track');
+  const r = track.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  return frac * fileDuration(f);
+}
+
+function bindTimeline() {
+  const track = $('tl-track');
+  const onSeek = (e) => {
+    const f = activeFile();
+    if (!f || f.isImage || !fileDuration(f)) return;
+    f.curTime = timelineSecFromEvent(e);
+    layoutTimeline();
+    fetchFrame(false);
+  };
+  $('tl-in-h').addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    rpDrag = { mode: 'tl-in' };
+  });
+  $('tl-out-h').addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    rpDrag = { mode: 'tl-out' };
+  });
+  track.addEventListener('mousedown', (e) => {
+    rpDrag = { mode: 'tl-seek' };
+    onSeek(e);
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!rpDrag || !rpDrag.mode.startsWith('tl-')) return;
+    const f = activeFile();
+    if (!f) return;
+    const dur = fileDuration(f);
+    if (!dur) return;
+    const sec = timelineSecFromEvent(e);
+    if (rpDrag.mode === 'tl-seek') {
+      onSeek(e);
+    } else if (rpDrag.mode === 'tl-in') {
+      f.inSec = Math.max(0, Math.min(sec, (f.outSec != null ? f.outSec : dur) - 0.05));
+      layoutTimeline();
+    } else if (rpDrag.mode === 'tl-out') {
+      f.outSec = Math.min(dur, Math.max(sec, (f.inSec != null ? f.inSec : 0) + 0.05));
+      layoutTimeline();
+    }
+  });
+  window.addEventListener('mouseup', () => {
+    if (rpDrag && (rpDrag.mode === 'tl-in' || rpDrag.mode === 'tl-out')) syncExportList();
+    if (rpDrag && rpDrag.mode.startsWith('tl-')) rpDrag = null;
+  });
 }
 
 function fetchFrame(immediate) {
@@ -1434,7 +1699,7 @@ function fetchFrame(immediate) {
   if (!f) return;
   if (frameTimer) clearTimeout(frameTimer);
   frameTimer = setTimeout(async () => {
-    const time = f.isImage ? 0 : parseFloat($('rp-time').value) || 0;
+    const time = f.isImage ? 0 : f.curTime || 0;
     try {
       const dataUrl = await api.previewFrame(f.path, time);
       const img = new Image();
@@ -1451,15 +1716,58 @@ function fetchFrame(immediate) {
   }, immediate ? 0 : 180);
 }
 
+// ---------------- clip controls ----------------
+function prettyCodec(probe) {
+  if (!probe || !probe.videoCodec) return '?';
+  const v = probe.videoCodec;
+  const variants = { apco: 'ProRes Proxy', apcs: 'ProRes LT', apcn: 'ProRes 422', apch: 'ProRes HQ', ap4h: 'ProRes 4444', ap4x: 'ProRes 4444 XQ' };
+  if (v === 'prores') return variants[probe.proresVariant] || 'ProRes';
+  return v.toUpperCase();
+}
+
+function refreshClipInfo() {
+  const f = activeFile();
+  const el = $('ct-info');
+  if (!f || !f.probe) {
+    el.textContent = f ? 'probing…' : '';
+    el.style.display = f ? '' : 'none';
+    return;
+  }
+  el.style.display = '';
+  const pr = f.probe;
+  const rows = [];
+  rows.push(`${pr.width || '?'}×${pr.height || '?'} px · ${prettyCodec(pr)}${pr.pixFmt ? ` (${pr.pixFmt})` : ''}`);
+  if (!f.isImage) {
+    const parts = [];
+    if (pr.durationSec) parts.push(`${pr.durationSec.toFixed(2)} s`);
+    if (pr.fps) parts.push(`${pr.fps} fps`);
+    if (pr.bitrateKbps) parts.push(`${(pr.bitrateKbps / 1000).toFixed(1)} Mbps`);
+    parts.push(pr.hasAudio ? 'audio ✓' : 'no audio');
+    rows.push(parts.join(' · '));
+  }
+  el.innerHTML = rows.join('<br>');
+}
+
+function scaleLinked(tr) {
+  return tr.scaleY == null;
+}
+
 function refreshClipControls() {
   const f = activeFile();
   const tr = f ? f.transform : Geometry.defaultTransform();
   $('rp-clip-section').style.opacity = f ? 1 : 0.4;
+  refreshClipInfo();
   $('ct-mode').value = tr.mode;
   $('ct-x').value = tr.x;
   $('ct-y').value = tr.y;
   $('ct-scale').value = tr.scale;
   $('ct-scale-n').value = tr.scale;
+  const linked = scaleLinked(tr);
+  $('ct-link').classList.toggle('active', linked);
+  $('ct-scale-label').textContent = linked ? 'Scale' : 'Scale W';
+  $('ct-scaley-row').classList.toggle('hidden', linked);
+  $('ct-scaley').value = tr.scaleY != null ? tr.scaleY : tr.scale;
+  $('ct-scaley-n').value = tr.scaleY != null ? tr.scaleY : tr.scale;
   $('ct-rot').value = tr.rotation;
   $('ct-rot-n').value = tr.rotation;
   $('ct-bright').value = Math.round(tr.brightness * 100);
@@ -1472,6 +1780,18 @@ function refreshClipControls() {
   $('ct-hue-v').textContent = tr.hue + '°';
   $('ct-blur').value = tr.blur;
   $('ct-blur-v').textContent = tr.blur;
+  refreshPixelReadout();
+}
+
+function refreshPixelReadout() {
+  const f = activeFile();
+  const el = $('ct-pixels');
+  if (!f || !f.probe || !f.probe.width) {
+    el.textContent = '';
+    return;
+  }
+  const lay = Geometry.clipLayout(f.probe.width, f.probe.height, f.transform, project.input.width, project.input.height);
+  el.textContent = `→ clip ${Math.round(lay.bw)}×${Math.round(lay.bh)} px on canvas ${project.input.width}×${project.input.height}`;
 }
 
 function bindClipControls() {
@@ -1480,13 +1800,30 @@ function bindClipControls() {
     if (!f) return;
     fn(f.transform);
     refreshFileList();
+    refreshPixelReadout();
     drawRenderPreview();
+    syncExportList();
   };
   $('ct-mode').onchange = () => upd((t) => (t.mode = $('ct-mode').value));
   $('ct-x').onchange = () => upd((t) => (t.x = clampInt($('ct-x').value, -100000, 100000)));
   $('ct-y').onchange = () => upd((t) => (t.y = clampInt($('ct-y').value, -100000, 100000)));
   $('ct-scale').oninput = () => { $('ct-scale-n').value = $('ct-scale').value; upd((t) => (t.scale = parseFloat($('ct-scale').value))); };
   $('ct-scale-n').onchange = () => { $('ct-scale').value = $('ct-scale-n').value; upd((t) => (t.scale = Math.max(1, parseFloat($('ct-scale-n').value) || 100))); };
+  $('ct-scaley').oninput = () => { $('ct-scaley-n').value = $('ct-scaley').value; upd((t) => (t.scaleY = parseFloat($('ct-scaley').value))); };
+  $('ct-scaley-n').onchange = () => { $('ct-scaley').value = $('ct-scaley-n').value; upd((t) => (t.scaleY = Math.max(1, parseFloat($('ct-scaley-n').value) || 100))); };
+  $('ct-link').onclick = () => {
+    const f = activeFile();
+    if (!f) return;
+    const tr = f.transform;
+    if (scaleLinked(tr)) {
+      tr.scaleY = tr.scale; // unlink
+    } else {
+      tr.scaleY = null; // link back
+    }
+    refreshClipControls();
+    drawRenderPreview();
+    syncExportList();
+  };
   $('ct-rot').oninput = () => { $('ct-rot-n').value = $('ct-rot').value; upd((t) => (t.rotation = parseFloat($('ct-rot').value))); };
   $('ct-rot-n').onchange = () => { $('ct-rot').value = $('ct-rot-n').value; upd((t) => (t.rotation = parseFloat($('ct-rot-n').value) || 0)); };
   $('ct-bright').oninput = () => { $('ct-bright-v').textContent = $('ct-bright').value; upd((t) => (t.brightness = parseInt($('ct-bright').value, 10) / 100)); };
@@ -1501,6 +1838,7 @@ function bindClipControls() {
     refreshClipControls();
     refreshFileList();
     drawRenderPreview();
+    syncExportList();
   };
   $('ct-apply-all').onclick = () => {
     const f = activeFile();
@@ -1509,12 +1847,81 @@ function bindClipControls() {
       if (o !== f) o.transform = JSON.parse(JSON.stringify(f.transform));
     });
     refreshFileList();
+    syncExportList();
   };
+}
+
+// drag the clip on the preview canvas (input view), with snapping
+function bindPreviewDrag() {
+  rpCanvas.addEventListener('mousedown', (e) => {
+    if (rp.viewMode !== 'input') return;
+    const f = activeFile();
+    if (!f || !f.probe || !f.probe.width || !f.frameImg) return;
+    const t = rp.vt;
+    const W = project.input.width, H = project.input.height;
+    const lay = Geometry.clipLayout(f.probe.width, f.probe.height, f.transform, W, H);
+    const x0 = t.ox + lay.x * t.scale;
+    const y0 = t.oy + lay.y * t.scale;
+    const x1 = x0 + lay.rw * t.scale;
+    const y1 = y0 + lay.rh * t.scale;
+    if (e.offsetX < x0 || e.offsetX > x1 || e.offsetY < y0 || e.offsetY > y1) return;
+    rpDrag = {
+      mode: 'clip',
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: f.transform.x || 0,
+      origY: f.transform.y || 0,
+      rw: lay.rw,
+      rh: lay.rh,
+    };
+    rpCanvas.style.cursor = 'move';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!rpDrag || rpDrag.mode !== 'clip') return;
+    const f = activeFile();
+    if (!f) return;
+    const t = rp.vt;
+    const W = project.input.width, H = project.input.height;
+    let nx = rpDrag.origX + (e.clientX - rpDrag.startX) / t.scale;
+    let ny = rpDrag.origY + (e.clientY - rpDrag.startY) / t.scale;
+    // snap: clip edges/center to canvas edges/center
+    const thr = 8 / t.scale;
+    const cx = W / 2 + nx, cy = H / 2 + ny;
+    const left = cx - rpDrag.rw / 2, right = cx + rpDrag.rw / 2;
+    const top = cy - rpDrag.rh / 2, bottom = cy + rpDrag.rh / 2;
+    const xSnaps = [
+      { d: 0 - left }, { d: W - right }, { d: W / 2 - cx },
+    ];
+    const ySnaps = [
+      { d: 0 - top }, { d: H - bottom }, { d: H / 2 - cy },
+    ];
+    let bx = null;
+    for (const sN of xSnaps) if (Math.abs(sN.d) <= thr && (bx === null || Math.abs(sN.d) < Math.abs(bx))) bx = sN.d;
+    let by = null;
+    for (const sN of ySnaps) if (Math.abs(sN.d) <= thr && (by === null || Math.abs(sN.d) < Math.abs(by))) by = sN.d;
+    if (bx !== null) nx += bx;
+    if (by !== null) ny += by;
+    f.transform.x = Math.round(nx);
+    f.transform.y = Math.round(ny);
+    $('ct-x').value = f.transform.x;
+    $('ct-y').value = f.transform.y;
+    drawRenderPreview();
+  });
+  window.addEventListener('mouseup', () => {
+    if (rpDrag && rpDrag.mode === 'clip') {
+      rpDrag = null;
+      rpCanvas.style.cursor = 'default';
+      refreshFileList();
+      refreshPixelReadout();
+      syncExportList();
+    }
+  });
 }
 
 // ---------------- codec UI ----------------
 function buildCodecSelect() {
   const sel = $('r-codec');
+  const prev = sel.value;
   const groups = {};
   for (const c of Codecs.CODECS) {
     (groups[c.group] = groups[c.group] || []).push(c);
@@ -1526,13 +1933,14 @@ function buildCodecSelect() {
         list
           .map((c) => {
             const rt = runtimeUnsupported(c);
-            return `<option value="${c.id}" ${c.unsupported || rt ? 'disabled' : ''}>${c.label}${c.unsupported ? ' — n/a' : rt ? ' — n/a' : ''}</option>`;
+            return `<option value="${c.id}" ${c.unsupported || rt ? 'disabled' : ''}>${c.label}${c.unsupported || rt ? ' — n/a' : ''}</option>`;
           })
           .join('') +
         '</optgroup>'
     )
     .join('');
-  sel.value = 'prores_hq';
+  sel.value = prev && Codecs.byId(prev) ? prev : 'prores_hq';
+  if (!sel.value) sel.value = 'prores_hq';
 }
 
 function runtimeUnsupported(c) {
@@ -1549,23 +1957,20 @@ function currentCodec() {
 
 function refreshCodecUI() {
   const def = currentCodec();
-  // alpha choices
   const alphaSel = $('r-alpha');
   [...alphaSel.options].forEach((o) => {
     o.disabled = o.value !== 'none' && !def.alpha.includes(o.value);
   });
   if (alphaSel.selectedOptions[0] && alphaSel.selectedOptions[0].disabled) alphaSel.value = 'none';
   alphaSel.disabled = !def.alpha.length;
-  // depth choices
   const depthSel = $('r-depth');
   [...depthSel.options].forEach((o) => {
     o.disabled = !def.depths.includes(parseInt(o.value, 10));
   });
   if (depthSel.selectedOptions[0] && depthSel.selectedOptions[0].disabled) depthSel.value = String(def.depths[0]);
   depthSel.disabled = def.depths.length <= 1;
-  // bitrate
   $('r-bitrate-row').style.display = def.bitrate ? '' : 'none';
-  // note
+  $('r-gpu').disabled = !Codecs.gpuCapable(def.id);
   const notes = [];
   if (def.unsupported) notes.push(def.unsupported);
   if (def.id === 'dxv') notes.push('DXT1 — plays natively in Resolume.');
@@ -1573,7 +1978,6 @@ function refreshCodecUI() {
   if (def.still) notes.push('One remapped frame at the current preview time — ideal for PowerPoint.');
   if (def.id === 'prores_4444' && $('r-alpha').value !== 'none') notes.push('Alpha requires footage with an alpha channel.');
   $('r-codec-note').textContent = notes.join(' ');
-  // still settings only relevant when image footage is selected (or still codec)
   const anyImage = rp.files.some((f) => f.selected !== false && f.isImage);
   $('r-still-row').style.display = anyImage && !def.still ? '' : 'none';
   updateStartButton();
@@ -1598,68 +2002,10 @@ async function sameAsSource() {
   $('r-codec-note').textContent = m.note;
 }
 
-// ---------------- test pattern ----------------
-async function addTestPattern() {
-  const IW = project.input.width, IH = project.input.height;
-  const maxDim = 8192;
-  const k = Math.min(1, maxDim / Math.max(IW, IH));
-  const c = document.createElement('canvas');
-  c.width = Math.round(IW * k);
-  c.height = Math.round(IH * k);
-  const g = c.getContext('2d');
-  // checker background
-  const cell = Math.max(16, Math.round(52 * k));
-  for (let y = 0, j = 0; y < c.height; y += cell, j++) {
-    for (let x = 0, i = 0; x < c.width; x += cell, i++) {
-      g.fillStyle = (i + j) % 2 ? '#2b2f33' : '#383e43';
-      g.fillRect(x, y, cell, cell);
-    }
-  }
-  // 100px grid
-  g.strokeStyle = 'rgba(255,255,255,0.25)';
-  g.lineWidth = 1;
-  for (let x = 0; x <= IW; x += 100) {
-    g.beginPath(); g.moveTo(x * k, 0); g.lineTo(x * k, c.height); g.stroke();
-  }
-  for (let y = 0; y <= IH; y += 100) {
-    g.beginPath(); g.moveTo(0, y * k); g.lineTo(c.width, y * k); g.stroke();
-  }
-  // per-slice markers
-  const colors = ['#f7941e', '#35e0b2', '#4fa3ff', '#e85dd0', '#ffd028', '#7fe860'];
-  project.slices.forEach((s, i) => {
-    if (s.enabled === false) return;
-    const col = colors[i % colors.length];
-    const x = s.in.x * k, y = s.in.y * k, w = s.in.w * k, h = s.in.h * k;
-    g.strokeStyle = col;
-    g.lineWidth = Math.max(2, 3 * k);
-    g.strokeRect(x + 1, y + 1, w - 2, h - 2);
-    g.beginPath();
-    g.moveTo(x, y); g.lineTo(x + w, y + h);
-    g.moveTo(x + w, y); g.lineTo(x, y + h);
-    g.stroke();
-    g.beginPath();
-    g.arc(x + w / 2, y + h / 2, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
-    g.stroke();
-    const fs = Math.max(11, Math.min(h * 0.35, w * 0.08));
-    g.font = `bold ${fs}px -apple-system, sans-serif`;
-    g.fillStyle = '#ffffff';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillText(`${i + 1} · ${s.name} · ${s.in.w}×${s.in.h}`, x + w / 2, y + h / 2);
-  });
-  const dataUrl = c.toDataURL('image/png');
-  try {
-    const p = await api.writeTempDataUrl(`testpattern-${sanitizeName(project.name)}.png`, dataUrl);
-    await addFootage([p], { select: true });
-  } catch (e) {
-    alert('Test pattern failed: ' + (e.message || e));
-  }
-}
-
-// ---------------- rasterized polygon masks for export ----------------
-async function buildMaskFiles(screenId) {
+// ---------------- rasterized polygon masks ----------------
+async function buildMaskFiles(proj, screenId) {
   const out = {};
-  for (const eff of Geometry.effectiveSlices(project, screenId)) {
+  for (const eff of Geometry.effectiveSlices(proj, screenId)) {
     if (!eff.polyMask) continue;
     const s = eff.slice;
     const poly = Geometry.maskPolyInPlace(s, eff);
@@ -1680,8 +2026,32 @@ async function buildMaskFiles(screenId) {
   return out;
 }
 
+// merged project: all screens side by side on one canvas
+function buildMergedProject() {
+  let offX = 0;
+  let H = 0;
+  for (const sc of project.screens) H = Math.max(H, sc.height);
+  const slices = [];
+  for (const sc of project.screens) {
+    for (const s of project.slices) {
+      if (sliceScreenId(s) !== sc.id) continue;
+      const c = JSON.parse(JSON.stringify(s));
+      c.out.x += offX;
+      c.screenId = 'merged';
+      slices.push(c);
+    }
+    offX += sc.width;
+  }
+  return {
+    name: project.name + ' (merged)',
+    input: JSON.parse(JSON.stringify(project.input)),
+    screens: [{ id: 'merged', name: 'Merged', width: offX, height: H }],
+    slices,
+  };
+}
+
 // ---------------- start export ----------------
-async function startRender(filesOverride) {
+async function startRender(filesOverride, optsOverride) {
   if (rp.running) return;
   const files = filesOverride || rp.files.filter((f) => f.selected !== false);
   if (!files.length) return;
@@ -1692,21 +2062,43 @@ async function startRender(filesOverride) {
   const bitrateMbps = parseFloat($('r-bitrate').value) || null;
   const fps = clampInt($('r-fps').value, 1, 240);
   const imageDuration = clampInt($('r-dur').value, 1, 3600);
+  const gpu = $('r-gpu').checked;
+
+  // multiple screens: separate / merged / both
+  let outMode = 'separate';
+  if (project.screens.length > 1) {
+    outMode = (optsOverride && optsOverride.mode) || (await askOutputMode());
+    if (!outMode) return;
+  }
+
+  const targets = []; // {proj, screen, suffix}
+  if (outMode === 'separate' || outMode === 'both') {
+    for (const scr of project.screens) {
+      targets.push({
+        proj: null, // use main project
+        screen: scr,
+        suffix: project.screens.length > 1 ? `_${sanitizeName(scr.name)}` : '',
+      });
+    }
+  }
+  if (outMode === 'merged' || outMode === 'both') {
+    const merged = buildMergedProject();
+    targets.push({ proj: merged, screen: merged.screens[0], suffix: '_merged' });
+  }
 
   const jobs = [];
-  const maskCache = {};
-  const multiScreen = project.screens.length > 1;
-  for (const scr of project.screens) {
-    if (!(scr.id in maskCache)) maskCache[scr.id] = await buildMaskFiles(scr.id);
-    let OW = Math.round(scr.width);
-    let OH = Math.round(scr.height);
+  for (const tgt of targets) {
+    const projForJob = tgt.proj || null;
+    const projUsed = projForJob || project;
+    const maskFiles = await buildMaskFiles(projUsed, tgt.screen.id);
+    let OW = Math.round(tgt.screen.width);
+    let OH = Math.round(tgt.screen.height);
     if (OW % 2) OW += 1;
     if (OH % 2) OH += 1;
-    const scrSuffix = multiScreen ? `_${sanitizeName(scr.name)}` : '';
     for (const f of files) {
       const pp = await api.pathParse(f.path);
       const dest = rp.destDir || pp.dir;
-      const stem = `${pp.base}_remap_${codecId}${alpha !== 'none' ? '_' + alpha : ''}_${OW}x${OH}${scrSuffix}`;
+      const stem = `${pp.base}_remap_${codecId}${alpha !== 'none' ? '_' + alpha : ''}_${OW}x${OH}${tgt.suffix}`;
       let outPath, outDir = null;
       if (def.sequence) {
         outDir = await api.pathJoin(dest, stem + '_seq');
@@ -1723,9 +2115,10 @@ async function startRender(filesOverride) {
         inSec: f.inSec,
         outSec: f.outSec,
         pngTime: def.still && !def.sequence && !f.isImage ? f.frameTime || f.inSec || 0 : 0,
-        screen: { id: scr.id, name: scr.name, width: scr.width, height: scr.height },
-        maskFiles: maskCache[scr.id],
-        label: multiScreen ? `${baseName(f.path)} → ${scr.name}` : baseName(f.path),
+        screen: { id: tgt.screen.id, name: tgt.screen.name, width: tgt.screen.width, height: tgt.screen.height },
+        maskFiles,
+        project: projForJob || undefined,
+        label: targets.length > 1 || project.screens.length > 1 ? `${baseName(f.path)} → ${tgt.screen.name}` : baseName(f.path),
       });
     }
   }
@@ -1751,6 +2144,7 @@ async function startRender(filesOverride) {
     bitrateMbps,
     fps,
     imageDuration,
+    gpu,
   };
   try {
     await api.renderStart(payload);
@@ -1774,6 +2168,11 @@ function onRenderEvent(ev) {
   } else if (ev.type === 'progress') {
     bar.style.width = `${ev.index * jobPart + (ev.percent / 100) * jobPart}%`;
     ppct.textContent = `${Math.round(ev.percent)}%`;
+  } else if (ev.type === 'job-note') {
+    const div = document.createElement('div');
+    div.textContent = `ℹ ${ev.note}`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
   } else if (ev.type === 'job-done') {
     bar.style.width = `${(ev.index + 1) * jobPart}%`;
     const div = document.createElement('div');
@@ -1815,7 +2214,7 @@ async function onWatchFile(p) {
       if (rp.running) {
         rp.watchQueue.push(f);
       } else {
-        startRender([f]);
+        startRender([f], { mode: localStorage.getItem('xre:outmode') || 'separate' });
       }
     }
   }
@@ -1824,7 +2223,7 @@ async function onWatchFile(p) {
 function processWatchQueue() {
   if (!rp.watchQueue.length || rp.running) return;
   const batch = rp.watchQueue.splice(0);
-  startRender(batch);
+  startRender(batch, { mode: localStorage.getItem('xre:outmode') || 'separate' });
 }
 
 // ---------------- import / export / open / save ----------------
@@ -1837,6 +2236,18 @@ async function importXml() {
   await importXmlPath(paths[0]);
 }
 
+async function switchToProject(p) {
+  project = migrateProject(p);
+  selId = null;
+  activeScreenId = project.screens[0].id;
+  await loadAllRefs();
+  loadExportListFromProject();
+  fitView('input');
+  fitView('output');
+  refreshAll();
+  markDirty();
+}
+
 async function importXmlPath(p) {
   try {
     const text = await api.readFileText(p);
@@ -1844,14 +2255,7 @@ async function importXmlPath(p) {
     proj.refs = { input: null, output: null };
     proj.slices.forEach((s) => (s.id = uid()));
     pushHistory();
-    project = migrateProject(proj);
-    selId = null;
-    activeScreenId = project.screens[0].id;
-    await loadAllRefs();
-    fitView('input');
-    fitView('output');
-    refreshAll();
-    markDirty();
+    await switchToProject(proj);
   } catch (err) {
     alert('Import failed: ' + (err.message || err));
   }
@@ -1886,14 +2290,7 @@ async function openProject() {
   try {
     const text = await api.readFileText(paths[0]);
     pushHistory();
-    project = migrateProject(JSON.parse(text));
-    selId = null;
-    activeScreenId = project.screens[0].id;
-    await loadAllRefs();
-    fitView('input');
-    fitView('output');
-    refreshAll();
-    markDirty();
+    await switchToProject(JSON.parse(text));
   } catch (err) {
     alert('Open failed: ' + (err.message || err));
   }
@@ -1936,14 +2333,7 @@ function bindUI() {
   $('btn-new').onclick = async () => {
     if (!confirm('Start a new project? Unsaved changes will be lost.')) return;
     pushHistory();
-    project = newProject();
-    selId = null;
-    activeScreenId = project.screens[0].id;
-    await loadAllRefs();
-    fitView('input');
-    fitView('output');
-    refreshAll();
-    markDirty();
+    await switchToProject(newProject());
   };
   $('btn-open-proj').onclick = openProject;
   $('btn-save-proj').onclick = saveProject;
@@ -1954,6 +2344,10 @@ function bindUI() {
   $('btn-dup-slice').onclick = duplicateSlice;
   $('btn-del-slice').onclick = deleteSlice;
   $('btn-split-slice').onclick = openSplitModal;
+
+  $('tp-preview').onclick = testPatternAsReference;
+  $('tp-save').onclick = saveTestPattern;
+  $('tp-export').onclick = addTestPattern;
 
   $('btn-ref-load').onclick = loadReference;
   $('btn-ref-clear').onclick = () => {
@@ -1972,7 +2366,6 @@ function bindUI() {
     }
   };
 
-  // project fields
   $('p-name').onchange = () => { pushHistory(); project.name = $('p-name').value || 'Untitled'; markDirty(); };
   const bindInputDim = (id, key) => {
     $(id).onchange = () => {
@@ -1987,11 +2380,10 @@ function bindUI() {
   bindInputDim('in-w', 'width');
   bindInputDim('in-h', 'height');
 
-  // screens
   $('p-screen-select').onchange = () => {
     activeScreenId = $('p-screen-select').value;
     refreshScreenSelectors();
-    if (view === 'output') { fitView('output'); }
+    if (view === 'output') fitView('output');
     refreshSliceList();
     draw();
   };
@@ -2049,7 +2441,6 @@ function bindUI() {
   bindScreenDim('out-w', 'width');
   bindScreenDim('out-h', 'height');
 
-  // slice fields
   $('sl-name').onchange = () => {
     const s = selected();
     if (!s) return;
@@ -2124,7 +2515,6 @@ function bindUI() {
     markDirty();
   };
 
-  // mask fields
   $('mask-enabled').onchange = () => {
     const s = selected();
     if (!s) return;
@@ -2152,7 +2542,6 @@ function bindUI() {
     draw();
     markDirty();
   };
-  // numeric mask bbox fields translate/scale the polygon
   const bindMaskBBox = (id, key) => {
     $(id).onchange = () => {
       const s = selected();
@@ -2179,7 +2568,6 @@ function bindUI() {
   bindMaskBBox('mask-x', 'x'); bindMaskBBox('mask-y', 'y');
   bindMaskBBox('mask-w', 'w'); bindMaskBBox('mask-h', 'h');
 
-  // editor canvas
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('dblclick', onDblClick);
   window.addEventListener('mousemove', (e) => {
@@ -2193,7 +2581,6 @@ function bindUI() {
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // right-click on any slider with data-default resets it (like Resolume)
   document.addEventListener('contextmenu', (e) => {
     const t = e.target;
     if (t && t.matches && t.matches('input[type="range"][data-default]')) {
@@ -2203,7 +2590,6 @@ function bindUI() {
     }
   });
 
-  // keyboard
   window.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -2244,7 +2630,6 @@ function bindUI() {
     if (e.code === 'Space') { spaceDown = false; canvas.style.cursor = 'default'; }
   });
 
-  // drag & drop
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', async (e) => {
     e.preventDefault();
@@ -2259,14 +2644,7 @@ function bindUI() {
     if (projs.length) {
       try {
         pushHistory();
-        project = migrateProject(JSON.parse(await api.readFileText(projs[0])));
-        selId = null;
-        activeScreenId = project.screens[0].id;
-        await loadAllRefs();
-        fitView('input');
-        fitView('output');
-        refreshAll();
-        markDirty();
+        await switchToProject(JSON.parse(await api.readFileText(projs[0])));
       } catch (err) {
         alert('Open failed: ' + (err.message || err));
       }
@@ -2318,46 +2696,49 @@ function bindUI() {
     const allSel = rp.files.every((f) => f.selected !== false);
     rp.files.forEach((f) => (f.selected = !allSel));
     refreshFileList();
+    syncExportList();
   };
   $('rp-remove').onclick = () => {
     if (rp.activeIndex < 0) return;
     rp.files.splice(rp.activeIndex, 1);
     rp.activeIndex = Math.min(rp.activeIndex, rp.files.length - 1);
+    syncExportList();
     refreshFileList();
     refreshClipControls();
-    refreshTrimUI();
+    layoutTimeline();
     if (activeFile()) selectFile(rp.activeIndex);
     else drawRenderPreview();
   };
-  $('rp-time').oninput = () => { updateTimeLabel(); fetchFrame(false); };
   $('rp-refresh').onclick = () => fetchFrame(true);
   $('rp-set-in').onclick = () => {
     const f = activeFile();
     if (!f || f.isImage) return;
-    f.inSec = parseFloat($('rp-time').value) || 0;
+    f.inSec = f.curTime || 0;
     if (f.outSec != null && f.outSec <= f.inSec) f.outSec = null;
-    refreshTrimUI();
-    updateTimeLabel();
+    layoutTimeline();
+    syncExportList();
   };
   $('rp-set-out').onclick = () => {
     const f = activeFile();
     if (!f || f.isImage) return;
-    f.outSec = parseFloat($('rp-time').value) || 0;
+    f.outSec = f.curTime || 0;
     if (f.inSec != null && f.inSec >= f.outSec) f.inSec = null;
-    refreshTrimUI();
-    updateTimeLabel();
+    layoutTimeline();
+    syncExportList();
   };
   $('rp-clear-trim').onclick = () => {
     const f = activeFile();
     if (!f) return;
     f.inSec = null;
     f.outSec = null;
-    refreshTrimUI();
-    updateTimeLabel();
+    layoutTimeline();
+    syncExportList();
   };
   $('r-codec').onchange = refreshCodecUI;
   $('r-alpha').onchange = refreshCodecUI;
   $('r-same-as-source').onclick = sameAsSource;
+  $('r-gpu').checked = localStorage.getItem('xre:gpu') === '1';
+  $('r-gpu').onchange = () => localStorage.setItem('xre:gpu', $('r-gpu').checked ? '1' : '0');
   $('r-dest-btn').onclick = async () => {
     const dir = await api.openDirDialog({ title: 'Choose output folder' });
     if (dir) {
@@ -2368,8 +2749,9 @@ function bindUI() {
   $('r-start').onclick = () => startRender();
   $('r-cancel').onclick = () => api.renderCancel();
   bindClipControls();
+  bindTimeline();
+  bindPreviewDrag();
 
-  // watch folder
   $('w-choose').onclick = async () => {
     const dir = await api.openDirDialog({ title: 'Choose watch folder' });
     if (!dir) return;
@@ -2420,6 +2802,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   resizeCanvas();
   fitView('input');
   fitView('output');
+  loadExportListFromProject();
   refreshAll();
   refreshCodecUI();
 
