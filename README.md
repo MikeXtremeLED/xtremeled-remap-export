@@ -75,7 +75,7 @@ Grab the latest build from the [**Releases**](../../releases) page:
 | --- | --- |
 | macOS — Apple Silicon (M1/M2/M3…) | `XtremeLED Remap Export-<version>-arm64.dmg` |
 | macOS — Intel | `XtremeLED Remap Export-<version>-x64.dmg` |
-| Windows 10/11 (64-bit) | `XtremeLED Remap Export-Setup-<version>.exe` |
+| Windows 10/11 (64-bit) | `XtremeLED Remap Export-<version>-x64.exe` |
 
 > **macOS note:** the app is not notarized (no Apple Developer subscription). On first launch,
 > right-click the app → **Open** → **Open**, or allow it under
