@@ -9,8 +9,18 @@ const Geometry = require('../shared/geometry');
 const Codecs = require('../shared/codecs');
 
 // Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg-<arch>).
-// Native binary per architecture: Intel (x64) and Apple Silicon (arm64).
-const bundledDir = path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv');
+// Native binary per architecture: Intel (x64), Apple Silicon (arm64), Windows (win64).
+// Shipped as extraResources (Contents/Resources/bin) — NOT inside the asar, so the
+// per-platform stripping in afterPack can't break asar integrity.
+const bundledDirs = [];
+if (process.resourcesPath) {
+  bundledDirs.push(path.join(process.resourcesPath, 'bin', 'ffmpeg-dxv'));
+}
+// dev / fallback: project bin, and legacy asar-unpacked location
+bundledDirs.push(path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv'));
+bundledDirs.push(
+  path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv').replace('app.asar', 'app.asar.unpacked')
+);
 
 let ffmpegStatic = null;
 try {
@@ -26,17 +36,18 @@ let capsCache = null;
 function candidateFfmpegs() {
   const list = [];
   if (process.env.XRE_FFMPEG) list.push(process.env.XRE_FFMPEG);
-  const dir = bundledDir.replace('app.asar', 'app.asar.unpacked');
   const native =
     process.platform === 'win32'
       ? 'ffmpeg-win64.exe'
       : process.arch === 'arm64'
         ? 'ffmpeg-arm64'
         : 'ffmpeg-x64';
-  list.push(path.join(dir, native));
-  list.push(path.join(dir, 'ffmpeg')); // legacy single-binary name
-  if (process.platform === 'darwin' && process.arch === 'arm64') {
-    list.push(path.join(dir, 'ffmpeg-x64')); // Rosetta fallback
+  for (const dir of bundledDirs) {
+    list.push(path.join(dir, native));
+    list.push(path.join(dir, 'ffmpeg')); // legacy single-binary name
+    if (process.platform === 'darwin' && process.arch === 'arm64') {
+      list.push(path.join(dir, 'ffmpeg-x64')); // Rosetta fallback
+    }
   }
   if (ffmpegStatic) list.push(ffmpegStatic);
   if (process.platform !== 'win32') {
