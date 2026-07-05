@@ -21,16 +21,55 @@
   "build": {
     "appId": "nl.xtremeled.remapexport",
     "productName": "XtremeLED Remap Export",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "afterPack": "tools/afterPack.js",
+    "asarUnpack": [
+      "bin/**"
+    ],
+    "files": [
+      "**/*",
+      "!examples/**",
+      "!test/**",
+      "!docs/**",
+      "!dist/**",
+      "!*.command",
+      "!node_modules/ffmpeg-static/**",
+      "!bin/ffmpeg-dxv/ffmpeg"
+    ],
     "mac": {
       "category": "public.app-category.video",
-      "target": "dmg",
-      "icon": "build/icon.icns"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "files": [
+        "!bin/ffmpeg-dxv/ffmpeg-win64.exe"
+      ]
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "files": [
+        "!bin/ffmpeg-dxv/ffmpeg-x64",
+        "!bin/ffmpeg-dxv/ffmpeg-arm64"
+      ]
     },
-    "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
-    ]
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

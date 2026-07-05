@@ -71,7 +71,7 @@ function clampInt(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 function baseName(p) {
-  return String(p).split('/').pop();
+  return String(p).split(/[\\/]/).pop();
 }
 function sanitizeName(s) {
   return String(s).replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'x';

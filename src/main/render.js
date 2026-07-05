@@ -27,12 +27,21 @@ function candidateFfmpegs() {
   const list = [];
   if (process.env.XRE_FFMPEG) list.push(process.env.XRE_FFMPEG);
   const dir = bundledDir.replace('app.asar', 'app.asar.unpacked');
-  const native = process.arch === 'arm64' ? 'ffmpeg-arm64' : 'ffmpeg-x64';
+  const native =
+    process.platform === 'win32'
+      ? 'ffmpeg-win64.exe'
+      : process.arch === 'arm64'
+        ? 'ffmpeg-arm64'
+        : 'ffmpeg-x64';
   list.push(path.join(dir, native));
   list.push(path.join(dir, 'ffmpeg')); // legacy single-binary name
-  if (process.arch === 'arm64') list.push(path.join(dir, 'ffmpeg-x64')); // Rosetta fallback
+  if (process.platform === 'darwin' && process.arch === 'arm64') {
+    list.push(path.join(dir, 'ffmpeg-x64')); // Rosetta fallback
+  }
   if (ffmpegStatic) list.push(ffmpegStatic);
-  list.push('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg');
+  if (process.platform !== 'win32') {
+    list.push('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg');
+  }
   return [...new Set(list)].filter((p) => {
     try {
       return fs.existsSync(p);

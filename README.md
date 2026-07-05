@@ -1,73 +1,127 @@
-# XtremeLED Remap Export
+<p align="center">
+  <img src="docs/icon.png" width="140" alt="XtremeLED Remap Export icon" />
+</p>
 
-Convert stageview renders (image/video) into output-mapped content for LED screens — so you can play content from any laptop without expensive playout software like Resolume Arena. Built for macOS with Electron (Windows possible later).
+<h1 align="center">XtremeLED Remap Export</h1>
 
-## Launch
+<p align="center">
+  <b>Turn stageview renders into output-mapped LED content — play complex screen mappings from any simple playout device.</b><br>
+  <sub>macOS (Intel & Apple Silicon) · Windows · Free & open source · Built for real-world LED shows by <a href="https://www.xtremeled.nl/">XtremeLED</a></sub>
+</p>
 
-```bash
-cd "~/Documents/XtremeLED remap export"
-npm install        # once
-npm start          # or double-click "XtremeLED Remap Export.command"
-```
+---
 
-## How it works
+## Why this exists
 
-1. **Input canvas** = the resolution of your stageview canvas (e.g. 10400×416 for a 50×2m P4.81 screen).
-2. **Output canvas** = the resolution of your final output (e.g. 3840×2160).
-3. Create **slices**: each slice has an *input rect* (where it samples the stageview) and an *output rect* (where it lands on the output) — just like Resolume Advanced Output.
-4. **Export**: pick stageview footage → the app cuts and places everything automatically.
+On a show you don't always have the luxury of a full media-server setup. Sometimes the machine
+on site simply can't create a **virtual display** or **slice transforms** to get content onto a
+complex LED screen the right way — and renting or licensing a full playout suite (like Resolume
+Arena) just to *play a file* is overkill.
+
+**XtremeLED Remap Export flips the problem around:** instead of remapping live at the venue, you
+remap the *content itself*, in advance.
+
+1. Load your **stageview render** (the video/image as designed on the full stage canvas).
+2. Set up the **input → output mapping** — the exact same slice principle as Resolume's
+   Advanced Output (or import your existing Resolume XML directly).
+3. Export. The content is cut, rotated, masked and re-placed into a ready-to-play output file.
+
+The result plays on **any simple playout device** — a laptop with QuickTime, a media player, even
+PowerPoint — and lands pixel-perfect on the LED processor. No slice transforms, no virtual
+displays, no expensive software on site.
+
+> 🤖 Fun fact: this is XtremeLED's first fully **AI-built** production tool — designed, coded and
+> tested end-to-end together with Claude (Anthropic), driven by real LED-show requirements.
+
+## Screenshots
+
+**Mapping page** — input/output slices exactly like Resolume Advanced Output, with masks (key
+points), 90° rotation, flip, multi-screen outputs and a live mapped preview:
+
+![Mapping page](docs/screenshot-mapping.png)
+
+**Export page** — batch footage with per-clip transform & color, trim timeline with audio
+waveform, live input/output preview, test pattern generator and a full codec matrix:
+
+![Export page](docs/screenshot-export.png)
 
 ## Features
 
-- **Import / Export XML** — full round-trip with Resolume Advanced Output XML, including **input masks**, **rotation** (orientation) and **flip**.
-- **Input masks with key points** — per slice, exactly like Resolume: polygon masks with draggable points (double-click an edge to add, right-click a point to remove), editable numerically too. Full XML round-trip.
-- **Rotation & flip** — 90° rotation steps on input and output rects; flip (H/V/both) with pac-man indicator button.
-- **Split rows** — cut a wide slice (e.g. a 50m×1m screen) into rows on the output canvas, with live summary of what you'll get.
-- **Undo / redo** — ⌘Z / ⇧⌘Z or the toolbar buttons.
-- **Reference images** — underlay for the Input Map; the Output Map shows a live preview of the mapped content.
-- **Multiple screens (outputs)** — manage screens in the Project panel; each slice is assigned to a screen. On export you choose: separate file per screen, one merged video (screens side by side), or both.
-- **Test pattern** — generate a test card (grid, circles, slice labels) from the Mapping page: set as reference, save as PNG, or send to the Export page to render in any codec.
-- **Export page** — full-page workflow:
-  - Footage list with per-file selection checkboxes; **test pattern generator** (renders slice names/grid at input canvas size); **watch folder** with auto-export of new files.
-  - Per clip: full **info** (resolution, codec, duration, fps, bitrate), **transform** (fit mode, position, linked or separate W/H scale with pixel readout, rotation) and **color** with live preview — Input *and* Output view. Drag the clip directly in the preview (snaps to canvas edges/center).
-  - Trim timeline with draggable **in/out handles** and playhead (keys: I / O), Shutter Encoder-style.
-  - **GPU acceleration** (VideoToolbox) for ProRes/HEVC/H.264 with automatic CPU fallback.
-  - The footage list (with per-file checkboxes) is saved inside the project; drag rows to reorder — slices in the Mapping page reorder the same way.
-  - **Codecs**: ProRes 422 Proxy/LT/422/HQ, ProRes 4444 (with/only alpha), DXV3, HAP Standard/Q (HAP alpha), HEVC/H.265 (8/10/12-bit, bitrate), H.264, PNG still (8/16-bit) and PNG sequence (written into its own folder). Codec name is part of the output filename.
-  - **Remap same as source** matches codec, bit depth and bitrate of the source footage.
-  - Right-click any slider to reset it to its default (like Resolume).
-  - Images render as 1 second of video (duration/fps configurable); audio from video sources is kept.
-- **Project save/open** (`.xreproj`), session auto-restore, drag & drop everywhere.
+- **Resolume-compatible XML** import & export — round-trips slices, input masks (polygons),
+  rotation and flip. Multiple screens supported.
+- **Slice editor** — drag/resize with snapping, key-point masks, 90° rotations, flip (H/V),
+  split-into-rows for extreme screen sizes (e.g. 50 m × 1 m), undo/redo, reorder by dragging.
+- **Export codecs**: ProRes 422 Proxy/LT/422/HQ, ProRes 4444 (with/only alpha), **DXV3**,
+  **HAP** Standard/Q, HEVC/H.265 (8/10/12-bit), H.264, PNG still / PNG sequence (8/16-bit),
+  WAV audio extract (16/24/32-bit).
+- **"Remap same as source"** — one click matches the source's codec, bit depth and bitrate.
+- **Per-clip control** — fit mode, position (drag with snapping), linked/separate W/H scale with
+  exact pixel input, rotation, brightness/contrast/saturation/hue/blur — all live in the preview
+  and identical in the ffmpeg render.
+- **Trim** — Shutter-Encoder-style timeline with draggable in/out handles, numeric fields and an
+  audio waveform.
+- **Multiple outputs** — export each screen separately, merged side-by-side, or both.
+- **Test pattern generator** — verify your mapping on the real LED wall with slice names, grid
+  and circles; use as reference, save as PNG or render to any codec.
+- **Watch folder** — drop renders in a folder and they're remapped automatically.
+- **GPU acceleration** (VideoToolbox on macOS) with automatic CPU fallback.
+- Native **ffmpeg** bundled for Intel Mac, Apple Silicon and Windows — no installation needed.
 
-### Editor controls
+## Download
 
-- Drag = move (snaps to canvas and slice edges) · handles = resize
-- Scroll = pan · ⌘/Ctrl+scroll = zoom · space+drag = pan
-- Arrow keys = nudge 1px (Shift = 10px) · Delete = remove · ⌘D = duplicate · ⌘Z = undo
+Grab the latest build from the [**Releases**](../../releases) page:
 
-## Tests
+| Platform | File |
+| --- | --- |
+| macOS — Apple Silicon (M1/M2/M3…) | `XtremeLED Remap Export-<version>-arm64.dmg` |
+| macOS — Intel | `XtremeLED Remap Export-<version>-x64.dmg` |
+| Windows 10/11 (64-bit) | `XtremeLED Remap Export-Setup-<version>.exe` |
+
+> **macOS note:** the app is not notarized (no Apple Developer subscription). On first launch,
+> right-click the app → **Open** → **Open**, or allow it under
+> *System Settings → Privacy & Security*.
+
+## Quick workflow
+
+1. **Mapping page** — set your input canvas to the stageview resolution (e.g. `10400×416` for a
+   50×2 m P4.81 screen), add a screen (output) and create slices — or **Import XML** from
+   Resolume.
+2. Check the mapping with a **test pattern** on the actual LED wall.
+3. **Export page** — add your stageview footage, tweak transform/trim if needed, pick a codec
+   (DXV3 for Resolume, ProRes for quality, H.264 for PowerPoint/laptops) and hit **Start export**.
+4. Play the exported file full-screen on the output — done.
+
+## Run from source
 
 ```bash
-npm test
+git clone https://github.com/MikeXtremeLED/xtremeled-remap-export.git
+cd xtremeled-remap-export
+npm install
+npm start          # run the app
+npm test           # geometry / XML / render test suite (28 checks with real ffmpeg renders)
 ```
 
-Covers XML import/export round-trip (with the real 50x2m example in `examples/`), mask/rotation geometry, and real ffmpeg renders (ProRes, DXV3, PNG, clip transforms, frame extraction).
-
-## Build a Mac app (.app / .dmg)
+### Build installers
 
 ```bash
-npm install --save-dev electron-builder
-npx electron-builder --mac
+# macOS (both architectures)
+npx electron-builder --mac --x64 --arm64
+
+# Windows (cross-build works from macOS/Linux)
+./tools/fetch-ffmpeg-win.sh     # one-time: downloads the Windows ffmpeg (149 MB, not in git)
+npx electron-builder --win --x64
 ```
-
-The app icon lives in `build/icon.icns` (regenerate with `npx electron . --makeicon=build/icon.png` + `iconutil`). For Windows later: `npx electron-builder --win`.
-
-## Intel & Apple Silicon
-
-The app bundles native ffmpeg binaries for both architectures (`bin/ffmpeg-dxv/ffmpeg-x64` and `ffmpeg-arm64`); the right one is picked automatically. On Apple Silicon the x64 binary also works via Rosetta as fallback.
 
 ## Notes
 
-- With fit mode "Stretch" (default) the source is stretched to the input canvas — use "Fit" and the transform controls when the footage resolution differs from the canvas.
-- DXV3 via ffmpeg uses DXT1 (DXV "Normal Quality", no alpha); Resolume plays it directly. For maximum quality use ProRes HQ.
-- Output canvas dimensions are rounded to even numbers when rendering (ProRes 4:2:2 requirement).
+- DXV3 encodes as DXT1 ("Normal Quality") — plays natively in Resolume. Notch LC and DXV3 HQ
+  have no ffmpeg encoder; use HAP Q or ProRes instead.
+- Sources with a different resolution than the input canvas can be fitted/filled/positioned per
+  clip; with "Stretch" (default) they're stretched to the canvas.
+- Output dimensions are rounded to even numbers where the codec requires it.
+
+## Credits
+
+Concept & field testing: **Mike — XtremeLED** ([xtremeled.nl](https://www.xtremeled.nl/)) ·
+Engineering: built with **Claude** (Anthropic) ·
+Rendering: [FFmpeg](https://ffmpeg.org/) (bundled builds by evermeet.cx, Martin Riedl and BtbN)
