@@ -79,27 +79,25 @@ Grab the latest build from the [**Releases**](../../releases) page:
 | macOS — Intel | `XtremeLED Remap Export-<version>-x64.dmg` |
 | Windows 10/11 (64-bit) | `XtremeLED Remap Export-<version>-x64.exe` |
 
-### ⚠️ macOS: "the app opens and immediately closes"
+### macOS: first launch is blocked ("unidentified developer")
 
-The app is **not notarized** (that needs a paid Apple Developer account). macOS puts every
-downloaded app in *quarantine*, and for a non-notarized app that means Gatekeeper launches it and
-kills it after ~1 second — it looks like the app "opens and instantly closes". This is **not a
-bug in the app**, it's macOS security.
+The app is **not notarized** (that needs a paid Apple Developer account), so on first launch
+macOS blocks it. This is normal for free apps — you only need to allow it once.
 
-**Fix (do this once):**
+**Recommended — no Terminal needed:**
 
-1. Move **XtremeLED Remap Export.app** to your **Applications** folder.
-2. Open **Terminal** and run:
+1. Move **XtremeLED Remap Export.app** to your **Applications** folder and double-click it.
+2. macOS shows a warning and refuses. Open  **System Settings → Privacy & Security**.
+3. Scroll down to the message *"XtremeLED Remap Export was blocked…"* and click **Open Anyway**.
+4. Confirm once — the app opens now and every time after.
 
-   ```bash
-   xattr -cr "/Applications/XtremeLED Remap Export.app"
-   ```
+**Alternative (Terminal), if the button doesn't appear:**
 
-3. Open the app normally — it now stays open.
+```bash
+xattr -cr "/Applications/XtremeLED Remap Export.app"
+```
 
-That command only removes the download-quarantine flag; you only need to do it once. (Right-click
-→ **Open** → **Open** sometimes works too, but the Terminal command is the reliable way for
-ad-hoc-signed apps.)
+Both do the same thing — remove the download block. You only need to do this once.
 
 **Windows** may show a "Windows protected your PC" SmartScreen prompt for the same reason — click
 **More info → Run anyway**.
