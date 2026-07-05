@@ -11,8 +11,6 @@
 
 ![Stageview content → XtremeLED Remap Export → output mapped](docs/hero.png)
 
-📺 **[Watch the full walkthrough video (2:21)](docs/tutorial-walkthrough.mp4)** — a guided tour through the Mapping and Export pages.
-
 ---
 
 ## Why this exists
