@@ -79,9 +79,30 @@ Grab the latest build from the [**Releases**](../../releases) page:
 | macOS — Intel | `XtremeLED Remap Export-<version>-x64.dmg` |
 | Windows 10/11 (64-bit) | `XtremeLED Remap Export-<version>-x64.exe` |
 
-> **macOS note:** the app is not notarized (no Apple Developer subscription). On first launch,
-> right-click the app → **Open** → **Open**, or allow it under
-> *System Settings → Privacy & Security*.
+### ⚠️ macOS: "the app opens and immediately closes"
+
+The app is **not notarized** (that needs a paid Apple Developer account). macOS puts every
+downloaded app in *quarantine*, and for a non-notarized app that means Gatekeeper launches it and
+kills it after ~1 second — it looks like the app "opens and instantly closes". This is **not a
+bug in the app**, it's macOS security.
+
+**Fix (do this once):**
+
+1. Move **XtremeLED Remap Export.app** to your **Applications** folder.
+2. Open **Terminal** and run:
+
+   ```bash
+   xattr -cr "/Applications/XtremeLED Remap Export.app"
+   ```
+
+3. Open the app normally — it now stays open.
+
+That command only removes the download-quarantine flag; you only need to do it once. (Right-click
+→ **Open** → **Open** sometimes works too, but the Terminal command is the reliable way for
+ad-hoc-signed apps.)
+
+**Windows** may show a "Windows protected your PC" SmartScreen prompt for the same reason — click
+**More info → Run anyway**.
 
 ## Quick workflow
 
