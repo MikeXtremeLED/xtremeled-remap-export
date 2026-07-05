@@ -227,6 +227,16 @@ const dm = info.match(/Duration: 00:00:0?(\d+(?:\.\d+)?)/);
 assert(dm && Math.abs(parseFloat(dm[1]) - 1) < 0.2, 'trimmed duration ~1s: ' + (dm && dm[1]));
 ok('in/out trim gives ~1s ProRes LT');
 
+// PNG still from a VIDEO at a seeked time must not be black (pts offset regression)
+const outPngVid = path.join(tmp, 'xre-test-pngvid.png');
+b = render.buildArgs(p, { src: srcVid, isImage: false, outPath: outPngVid, pngTime: 1.0 }, { codec: 'png', depth: 8 }, vidProbe);
+run = spawnSync(caps.proresPath, b.args, { encoding: 'utf8', timeout: 60000 });
+assert.strictEqual(run.status, 0, (run.stderr || '').slice(-1500));
+const vidLuma = meanLuma(caps.proresPath, outPngVid);
+assert(vidLuma !== null && vidLuma > 5, `PNG from seeked video must not be black (YAVG=${vidLuma})`);
+fs.unlinkSync(outPngVid);
+ok(`PNG still from video @1.0s has content (YAVG=${vidLuma})`);
+
 // ---------- 11) transform + adjustments ----------
 console.log('Test 11: clip transform');
 const outTr = path.join(tmp, 'xre-test-tr.mov');

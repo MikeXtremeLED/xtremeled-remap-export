@@ -268,11 +268,16 @@ function buildArgs(project, job, opts, probe) {
   const parts = [];
   const tr = job.transform;
 
+  // Stills grab frame #1: after an input seek (-ss) the first video frame can start
+  // slightly after t=0 while the color base starts at 0 — reset pts so they line up,
+  // otherwise the exported still is the bare black base.
+  const ptsReset = isStill && !isSeq ? ['setpts=PTS-STARTPTS'] : [];
+
   if (!Geometry.isIdentityTransform(tr) && probe && probe.width && probe.height) {
     const lay = Geometry.clipLayout(probe.width, probe.height, tr, IW, IH);
     const bw = Math.max(2, Math.round(lay.bw));
     const bh = Math.max(2, Math.round(lay.bh));
-    const chain = [`scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
+    const chain = [...ptsReset, `scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
     if (useAlphaPipeline) chain.push('format=rgba');
     if (tr.rotation) {
       chain.push(
@@ -284,7 +289,7 @@ function buildArgs(project, job, opts, probe) {
     parts.push(`color=c=${baseColor}:s=${IW}x${IH}:r=${fps}${fmtRGBA}[ibase]`);
     parts.push(`[ibase][clip]overlay=${Math.round(lay.x)}:${Math.round(lay.y)}:shortest=1[src]`);
   } else {
-    const chain = [`scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr)];
+    const chain = [...ptsReset, `scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr)];
     if (useAlphaPipeline) chain.push('format=rgba');
     parts.push(`[0:v]${chain.join(',')}[src]`);
   }

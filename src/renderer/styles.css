@@ -76,10 +76,13 @@ select { width: auto; }
 .brand .logo:hover .t, .brand .logo:hover .led { color: #d9dcde; }
 .brand .logo .x { color: var(--accent); font-size: 20px; font-weight: 900; line-height: 0.9; margin-right: -0.5px; }
 .brand .logo .t { letter-spacing: 0.6px; }
-.brand .led { display: inline-flex; align-items: baseline; margin-left: 5px; }
-/* the bars form the E: center them on the cap height (flex column baseline = first bar!) */
-.brand .ebars { display: inline-flex; flex-direction: column; gap: 1.6px; margin: 0 1.6px; align-self: center; transform: translateY(-0.5px); }
-.brand .ebars i { display: block; width: 9px; height: 2.8px; border-radius: 1px; }
+.brand .led { display: inline; margin-left: 5px; }
+/* the bars form the E and span exactly the cap height of the letters:
+   an inline-block with only block children puts its baseline at its BOTTOM edge,
+   so bottom = text baseline and height = cap height (≈0.7 × font-size). */
+.brand .ebars { display: inline-block; vertical-align: baseline; height: 10.5px; margin: 0 1.6px; }
+.brand .ebars i { display: block; width: 9px; height: 2.7px; margin-top: 1.2px; border-radius: 1px; }
+.brand .ebars i:first-child { margin-top: 0; }
 .brand .ebars i:nth-child(1) { background: #e8492e; }
 .brand .ebars i:nth-child(2) { background: #4caf50; }
 .brand .ebars i:nth-child(3) { background: #2196f3; }
