@@ -8,112 +8,242 @@
 </head>
 <body>
   <header id="toolbar">
-    <div class="brand">Xtreme<span>LED</span>&nbsp;Remap&nbsp;Export</div>
-    <div class="tb-group">
-      <button id="btn-new" title="Nieuw project">New</button>
-      <button id="btn-open-proj" title="Project openen (.xreproj)">Open…</button>
-      <button id="btn-save-proj" title="Project opslaan (.xreproj)">Save</button>
+    <div class="brand">
+      <span class="logo"><b class="x">X</b>TREME <span class="led">L<span class="ebars"><i></i><i></i><i></i></span>D</span></span>
+      <span class="app-name">Remap Export</span>
+    </div>
+    <div class="tb-group" id="tb-editor-left">
+      <button id="btn-new" title="New project">New</button>
+      <button id="btn-open-proj" title="Open project (.xreproj)">Open…</button>
+      <button id="btn-save-proj" title="Save project (.xreproj)">Save</button>
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group">
-      <button id="btn-import-xml" title="Resolume Advanced Output XML importeren">Import XML</button>
-      <button id="btn-export-xml" title="Exporteren als Resolume-compatible XML">Export XML</button>
+      <button id="btn-undo" title="Undo (⌘Z)">↶</button>
+      <button id="btn-redo" title="Redo (⇧⌘Z)">↷</button>
     </div>
     <div class="tb-sep"></div>
-    <div class="tabs">
+    <div class="tb-group">
+      <button id="btn-import-xml" title="Import Resolume Advanced Output XML">Import XML</button>
+      <button id="btn-export-xml" title="Export Resolume-compatible XML">Export XML</button>
+    </div>
+    <div class="tb-sep"></div>
+    <div class="tabs" id="view-tabs">
       <button id="tab-input" class="tab active">Input Map</button>
       <button id="tab-output" class="tab">Output Map</button>
     </div>
     <div class="tb-group zoom">
-      <button id="btn-zoom-out" title="Uitzoomen">−</button>
+      <button id="btn-zoom-out" title="Zoom out">−</button>
       <span id="zoom-label">100%</span>
-      <button id="btn-zoom-in" title="Inzoomen">+</button>
-      <button id="btn-zoom-fit" title="Passend zoomen">Fit</button>
+      <button id="btn-zoom-in" title="Zoom in">+</button>
+      <button id="btn-zoom-fit" title="Zoom to fit">Fit</button>
     </div>
     <div class="spacer"></div>
-    <button id="btn-render" class="accent">Render…</button>
+    <button id="btn-render" class="accent">Render</button>
+    <button id="btn-back-editor" class="accent hidden">← Mapping</button>
   </header>
 
   <div id="main">
-    <aside id="left">
-      <div class="panel-title">Slices</div>
-      <div id="slice-list"></div>
-      <div class="left-buttons">
-        <button id="btn-add-slice">+ Slice</button>
-        <button id="btn-dup-slice">Duplicate</button>
-        <button id="btn-split-slice">Auto-split…</button>
-        <button id="btn-del-slice" class="danger">Delete</button>
-      </div>
-    </aside>
+    <!-- ======================= EDITOR PAGE ======================= -->
+    <div id="editor-page">
+      <aside id="left">
+        <div class="panel-title">Slices</div>
+        <div id="slice-list"></div>
+        <div class="left-buttons">
+          <button id="btn-add-slice">+ Slice</button>
+          <button id="btn-dup-slice">Duplicate</button>
+          <button id="btn-split-slice">Split rows…</button>
+          <button id="btn-del-slice" class="danger">Delete</button>
+        </div>
+      </aside>
 
-    <div id="center">
-      <canvas id="editor"></canvas>
-      <div id="statusbar">
-        <span id="status-pos"></span>
-        <span id="status-hint">Sleep = verplaats · Handles = schalen · Scroll = pan · ⌘/Ctrl+scroll = zoom</span>
+      <div id="center">
+        <canvas id="editor"></canvas>
+        <div id="statusbar">
+          <span id="status-pos"></span>
+          <span id="status-hint">Drag = move · Handles = resize · Scroll = pan · ⌘/Ctrl+scroll = zoom · ⌘Z undo</span>
+        </div>
       </div>
+
+      <aside id="right">
+        <div class="section">
+          <div class="panel-title">Project</div>
+          <div class="row"><label>Name</label><input type="text" id="p-name" /></div>
+          <div class="subtitle">Input canvas (stageview)</div>
+          <div class="row2">
+            <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
+            <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
+          </div>
+          <div class="subtitle">Output canvas</div>
+          <div class="row2">
+            <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
+            <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="panel-title">Reference — <span id="ref-view-label">Input</span></div>
+          <div class="row">
+            <button id="btn-ref-load">Load image…</button>
+            <button id="btn-ref-clear" title="Remove reference">✕</button>
+          </div>
+          <div class="row"><span id="ref-name" class="dim">no image</span></div>
+          <div class="row">
+            <label>Opacity</label>
+            <input type="range" id="ref-opacity" min="0" max="100" value="60" />
+          </div>
+        </div>
+
+        <div class="section" id="slice-props">
+          <div class="panel-title">Slice</div>
+          <div class="row"><label>Name</label><input type="text" id="sl-name" /></div>
+          <div class="row"><label>Enabled</label><input type="checkbox" id="sl-enabled" /></div>
+
+          <div class="subtitle">Input rect</div>
+          <div class="row4">
+            <label>X</label><input type="number" id="sl-in-x" class="num" />
+            <label>Y</label><input type="number" id="sl-in-y" class="num" />
+            <label>W</label><input type="number" id="sl-in-w" class="num" />
+            <label>H</label><input type="number" id="sl-in-h" class="num" />
+          </div>
+          <div class="row">
+            <label>Rotation</label>
+            <select id="sl-in-rot" class="rot-select">
+              <option value="0">0°</option><option value="90">90°</option>
+              <option value="180">180°</option><option value="270">270°</option>
+            </select>
+          </div>
+
+          <div class="subtitle">Output rect</div>
+          <div class="row4">
+            <label>X</label><input type="number" id="sl-out-x" class="num" />
+            <label>Y</label><input type="number" id="sl-out-y" class="num" />
+            <label>W</label><input type="number" id="sl-out-w" class="num" />
+            <label>H</label><input type="number" id="sl-out-h" class="num" />
+          </div>
+          <div class="row">
+            <label>Rotation</label>
+            <select id="sl-out-rot" class="rot-select">
+              <option value="0">0°</option><option value="90">90°</option>
+              <option value="180">180°</option><option value="270">270°</option>
+            </select>
+            <label style="min-width:28px">Flip</label>
+            <button id="sl-flip" class="flip-btn" title="Cycle flip: none / horizontal / vertical / both">
+              <svg viewBox="0 0 20 20" width="18" height="18"><path id="flip-pac" d="" fill="currentColor"/></svg>
+              <span id="flip-label">None</span>
+            </button>
+          </div>
+
+          <div class="subtitle">Input mask</div>
+          <div class="row">
+            <label>Enabled</label><input type="checkbox" id="mask-enabled" />
+            <label style="min-width:auto">Edit on canvas</label><input type="checkbox" id="mask-edit" />
+          </div>
+          <div class="row4">
+            <label>X</label><input type="number" id="mask-x" class="num" />
+            <label>Y</label><input type="number" id="mask-y" class="num" />
+            <label>W</label><input type="number" id="mask-w" class="num" />
+            <label>H</label><input type="number" id="mask-h" class="num" />
+          </div>
+          <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
+        </div>
+
+        <div class="section">
+          <div class="panel-title">Engine</div>
+          <div id="ffmpeg-info" class="dim">ffmpeg: searching…</div>
+        </div>
+      </aside>
     </div>
 
-    <aside id="right">
-      <div class="section">
-        <div class="panel-title">Project</div>
-        <div class="row"><label>Naam</label><input type="text" id="p-name" /></div>
-        <div class="subtitle">Input canvas (stageview)</div>
-        <div class="row2">
-          <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
-          <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
+    <!-- ======================= RENDER PAGE ======================= -->
+    <div id="render-page" class="hidden">
+      <aside id="rp-left">
+        <div class="panel-title">Footage</div>
+        <div id="rp-files"></div>
+        <div class="left-buttons one-col">
+          <button id="rp-add">+ Add footage…</button>
+          <button id="rp-remove" class="danger">Remove</button>
         </div>
-        <div class="subtitle">Output canvas</div>
-        <div class="row2">
-          <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
-          <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
+      </aside>
+
+      <div id="rp-center">
+        <canvas id="rp-canvas"></canvas>
+        <div id="rp-timeline">
+          <button id="rp-refresh" title="Refresh preview frame">⟳</button>
+          <input type="range" id="rp-time" min="0" max="0" step="0.04" value="0" />
+          <span id="rp-timelabel" class="dim">0.00 s</span>
         </div>
       </div>
 
-      <div class="section">
-        <div class="panel-title">Reference — <span id="ref-view-label">Input</span></div>
-        <div class="row">
-          <button id="btn-ref-load">Load image…</button>
-          <button id="btn-ref-clear" title="Reference verwijderen">✕</button>
-        </div>
-        <div class="row"><span id="ref-name" class="dim">geen afbeelding</span></div>
-        <div class="row">
-          <label>Opacity</label>
-          <input type="range" id="ref-opacity" min="0" max="100" value="60" />
-        </div>
-      </div>
+      <aside id="rp-right">
+        <div class="section" id="rp-clip-section">
+          <div class="panel-title">Clip — <span id="rp-clip-name" class="dim">no selection</span></div>
+          <div class="row">
+            <label>Fit</label>
+            <select id="ct-mode">
+              <option value="stretch">Stretch to canvas</option>
+              <option value="fit">Fit (contain)</option>
+              <option value="fill">Fill (cover)</option>
+              <option value="native">Native size</option>
+            </select>
+          </div>
+          <div class="row2">
+            <label style="width:56px">Pos X</label><input type="number" id="ct-x" class="num" value="0" />
+            <label style="width:14px">Y</label><input type="number" id="ct-y" class="num" value="0" />
+          </div>
+          <div class="row slider-row"><label>Scale</label><input type="range" id="ct-scale" min="1" max="400" value="100" /><input type="number" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span></div>
+          <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" /><input type="number" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
 
-      <div class="section" id="slice-props">
-        <div class="panel-title">Slice</div>
-        <div class="row"><label>Naam</label><input type="text" id="sl-name" /></div>
-        <div class="row"><label>Enabled</label><input type="checkbox" id="sl-enabled" /></div>
-        <div class="subtitle">Input rect</div>
-        <div class="row4">
-          <label>X</label><input type="number" id="sl-in-x" class="num" />
-          <label>Y</label><input type="number" id="sl-in-y" class="num" />
-          <label>W</label><input type="number" id="sl-in-w" class="num" />
-          <label>H</label><input type="number" id="sl-in-h" class="num" />
+          <div class="subtitle">Color</div>
+          <div class="row slider-row"><label>Bright</label><input type="range" id="ct-bright" min="-100" max="100" value="0" /><span id="ct-bright-v" class="dim val">0</span></div>
+          <div class="row slider-row"><label>Contrast</label><input type="range" id="ct-contrast" min="-100" max="100" value="0" /><span id="ct-contrast-v" class="dim val">0</span></div>
+          <div class="row slider-row"><label>Saturation</label><input type="range" id="ct-sat" min="0" max="200" value="100" /><span id="ct-sat-v" class="dim val">1.0</span></div>
+          <div class="row slider-row"><label>Hue</label><input type="range" id="ct-hue" min="-180" max="180" value="0" /><span id="ct-hue-v" class="dim val">0°</span></div>
+          <div class="row slider-row"><label>Blur</label><input type="range" id="ct-blur" min="0" max="50" value="0" /><span id="ct-blur-v" class="dim val">0</span></div>
+          <div class="row">
+            <button id="ct-reset">Reset clip</button>
+            <button id="ct-apply-all">Apply to all</button>
+          </div>
         </div>
-        <div class="subtitle">Output rect</div>
-        <div class="row4">
-          <label>X</label><input type="number" id="sl-out-x" class="num" />
-          <label>Y</label><input type="number" id="sl-out-y" class="num" />
-          <label>W</label><input type="number" id="sl-out-w" class="num" />
-          <label>H</label><input type="number" id="sl-out-h" class="num" />
-        </div>
-      </div>
 
-      <div class="section">
-        <div class="panel-title">Engine</div>
-        <div id="ffmpeg-info" class="dim">ffmpeg: zoeken…</div>
-      </div>
-    </aside>
+        <div class="section">
+          <div class="panel-title">Render settings</div>
+          <div class="row"><label>Codec</label></div>
+          <div class="radio-col">
+            <label><input type="radio" name="r-codec" value="prores" checked /> Apple ProRes 422 HQ (.mov)</label>
+            <label id="dxv-radio-row"><input type="radio" name="r-codec" value="dxv" /> DXV3 (.mov)</label>
+            <label><input type="radio" name="r-codec" value="png" /> PNG still (.png)</label>
+          </div>
+          <div class="note">PNG exports one remapped frame — ideal for PowerPoint. For video footage the current preview time is used.</div>
+          <div class="row2">
+            <label style="width:80px">Still FPS</label><input type="number" id="r-fps" class="num" value="50" min="1" max="240" />
+            <label style="width:88px">Still length</label><input type="number" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
+          </div>
+          <div class="row">
+            <label>Output</label>
+            <button id="r-dest-btn">Choose…</button>
+          </div>
+          <div class="row"><span id="r-dest" class="dim ellip">same folder as footage</span></div>
+        </div>
+
+        <div class="section">
+          <button id="r-start" class="accent big" disabled>Start render</button>
+          <div class="progress-wrap" id="r-progress" style="display:none">
+            <div class="progress-bar"><div id="r-bar"></div></div>
+            <div class="progress-label"><span id="r-plabel"></span><span id="r-ppct"></span></div>
+            <button id="r-cancel" class="danger" style="margin-top:8px">Cancel</button>
+          </div>
+          <div class="render-log" id="r-log"></div>
+        </div>
+      </aside>
+    </div>
   </div>
 
   <div id="modal-root" class="hidden"></div>
 
   <script src="../shared/sxml.js"></script>
   <script src="../shared/resolume.js"></script>
+  <script src="../shared/geometry.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

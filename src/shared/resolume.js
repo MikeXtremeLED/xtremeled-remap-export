@@ -1,7 +1,6 @@
 'use strict';
 // Resolume Advanced Output (ScreenSetup) XML import & export.
-// Bij import worden slice-masks omgerekend naar effectieve sub-slices,
-// zodat een "lange strip over meerdere rijen" mapping als losse rechthoeken binnenkomt.
+// Slice masks, rect orientation (rotation) and flip are preserved as first-class data.
 (function (global, factory) {
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = factory(require('./sxml'));
@@ -34,26 +33,6 @@
       if (p) return p.attrs.value;
     }
     return undefined;
-  }
-
-  function intersect(a, b) {
-    const x0 = Math.max(a.x, b.x);
-    const y0 = Math.max(a.y, b.y);
-    const x1 = Math.min(a.x + a.w, b.x + b.w);
-    const y1 = Math.min(a.y + a.h, b.y + b.h);
-    if (x1 <= x0 || y1 <= y0) return null;
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-  }
-
-  function mapRect(sub, from, to) {
-    const kx = to.w / from.w;
-    const ky = to.h / from.h;
-    return {
-      x: to.x + (sub.x - from.x) * kx,
-      y: to.y + (sub.y - from.y) * ky,
-      w: sub.w * kx,
-      h: sub.h * ky,
-    };
   }
 
   function rnd(r) {
@@ -95,26 +74,37 @@
       for (const sl of SXML.findAllDeep(screen, (e) => e.tag === 'Slice')) {
         const nm = paramValue(sl, 'Common', 'Name') || 'Slice ' + idc;
         const enabled = paramValue(sl, 'Common', 'Enabled') !== '0';
-        const inR = bboxOf(SXML.firstChild(sl, 'InputRect'));
-        const outR = bboxOf(SXML.firstChild(sl, 'OutputRect'));
+        const inRectEl = SXML.firstChild(sl, 'InputRect');
+        const outRectEl = SXML.firstChild(sl, 'OutputRect');
+        const inR = bboxOf(inRectEl);
+        const outR = bboxOf(outRectEl);
         if (!inR || !outR || inR.w <= 0 || inR.h <= 0) continue;
 
-        let effIn = inR;
-        let effOut = outR;
-        const mask = SXML.firstChild(sl, 'SliceMask');
-        if (mask) {
-          const mEnabled = paramValue(mask, 'Input Mask', 'Enabled') !== '0';
-          const shape = SXML.firstChild(mask, 'ShapeObject');
+        const inOrient = parseInt((inRectEl.attrs.orientation || '0'), 10) || 0;
+        const outOrient = parseInt((outRectEl.attrs.orientation || '0'), 10) || 0;
+        const flip = parseInt(paramValue(sl, 'Output', 'Flip') || '0', 10) || 0;
+
+        let mask = null;
+        const maskEl = SXML.firstChild(sl, 'SliceMask');
+        if (maskEl) {
+          const mEnabled = paramValue(maskEl, 'Input Mask', 'Enabled') !== '0';
+          const shape = SXML.firstChild(maskEl, 'ShapeObject');
           const mR = shape ? bboxOf(SXML.firstChild(shape, 'Rect')) : null;
-          if (mEnabled && mR) {
-            const ix = intersect(inR, mR);
-            if (ix) {
-              effOut = mapRect(ix, inR, outR);
-              effIn = ix;
-            }
+          if (mR && mR.w > 0 && mR.h > 0) {
+            mask = { enabled: mEnabled, ...rnd(mR) };
           }
         }
-        slices.push({ id: 'imp' + idc++, name: nm, enabled, in: rnd(effIn), out: rnd(effOut) });
+        slices.push({
+          id: 'imp' + idc++,
+          name: nm,
+          enabled,
+          in: rnd(inR),
+          out: rnd(outR),
+          inOrient,
+          outOrient,
+          flip,
+          mask,
+        });
       }
     }
 
@@ -210,6 +200,8 @@
 
     project.slices.forEach((s, i) => {
       const uid = 2150 + i * 2000;
+      const inOrient = s.inOrient || 0;
+      const outOrient = s.outOrient || 0;
       L.push(`                    <Slice uniqueId="${uid}">`);
       L.push('                        <Params name="Common">');
       L.push(
@@ -228,7 +220,7 @@
       L.push('                            <Param name="SoftEdgeEnable" default="0" value="0"/>');
       L.push('                        </Params>');
       L.push('                        <Params name="Output">');
-      L.push('                            <Param name="Flip" default="0" value="0"/>');
+      L.push(`                            <Param name="Flip" default="0" value="${s.flip || 0}"/>`);
       L.push(
         '                            <ParamRange name="Brightness" default="0" value="0"><ValueRange name="defaultRange" min="-1" max="1"/></ParamRange>'
       );
@@ -256,10 +248,10 @@
         '                            <ParamRange name="BBlue" default="0" value="0"><ValueRange name="defaultRange" min="0" max="0.40000000000000002"/></ParamRange>'
       );
       L.push('                        </Params>');
-      L.push('                        <InputRect orientation="0">');
+      L.push(`                        <InputRect orientation="${inOrient}">`);
       L.push(rectVerts(s.in, '                            '));
       L.push('                        </InputRect>');
-      L.push('                        <OutputRect orientation="0">');
+      L.push(`                        <OutputRect orientation="${outOrient}">`);
       L.push(rectVerts(s.out, '                            '));
       L.push('                        </OutputRect>');
       L.push('                        <Warper>');
@@ -280,6 +272,35 @@
       L.push('                                </dst>');
       L.push('                            </Homography>');
       L.push('                        </Warper>');
+      if (s.mask && s.mask.w > 0 && s.mask.h > 0) {
+        const m = s.mask;
+        L.push('                        <SliceMask>');
+        L.push('                            <Params name="Input Mask">');
+        L.push('                                <Param name="Name" default="Mask" value="Mask"/>');
+        L.push(`                                <Param name="Enabled" default="1" value="${m.enabled === false ? 0 : 1}"/>`);
+        L.push('                                <Param name="Invert" default="1" value="1"/>');
+        L.push('                            </Params>');
+        L.push('                            <ShapeObject>');
+        L.push('                                <Params name="Shape">');
+        L.push('                                    <ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>');
+        L.push('                                </Params>');
+        L.push('                                <Rect orientation="0">');
+        L.push(rectVerts(m, '                                    '));
+        L.push('                                </Rect>');
+        L.push('                                <Shape>');
+        L.push('                                    <Contour closed="1">');
+        L.push('                                        <points>');
+        L.push(`                                            <v x="${m.x}" y="${m.y}"/>`);
+        L.push(`                                            <v x="${m.x}" y="${m.y + m.h}"/>`);
+        L.push(`                                            <v x="${m.x + m.w}" y="${m.y + m.h}"/>`);
+        L.push(`                                            <v x="${m.x + m.w}" y="${m.y}"/>`);
+        L.push('                                        </points>');
+        L.push('                                        <segments>LLLL</segments>');
+        L.push('                                    </Contour>');
+        L.push('                                </Shape>');
+        L.push('                            </ShapeObject>');
+        L.push('                        </SliceMask>');
+      }
       L.push('                    </Slice>');
     });
 

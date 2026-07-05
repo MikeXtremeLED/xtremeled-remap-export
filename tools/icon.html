@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 1024px; height: 1024px; background: transparent; overflow: hidden; }
+  #icon {
+    position: relative;
+    width: 1024px; height: 1024px;
+    background: #101315;
+    border-radius: 184px; /* macOS squircle-ish */
+    overflow: hidden;
+    font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  }
+  .blk { position: absolute; border: 3px solid rgba(255,255,255,0.55); box-sizing: border-box; }
+  /* green screen layer (top-right, like output map) */
+  .g1 { background: #57b45e; }
+  .g2 { background: #2e5d36; }
+  /* purple screen layer (bottom-left) */
+  .p1 { background: #b13fc4; }
+  .p2 { background: #5c2266; }
+  .cross { position: absolute; inset: 0; }
+  .cross svg { width: 100%; height: 100%; }
+  /* center branding */
+  #brand {
+    position: absolute; left: 0; right: 0; top: 50%;
+    transform: translateY(-54%);
+    text-align: center;
+    z-index: 10;
+  }
+  #brand .row {
+    display: inline-flex; align-items: baseline;
+    background: rgba(8,10,11,0.82);
+    padding: 34px 58px 30px;
+    border-radius: 34px;
+    box-shadow: 0 12px 60px rgba(0,0,0,0.55);
+  }
+  #logo { display: inline-flex; align-items: baseline; letter-spacing: 2px; }
+  #logo .x { color: #f7941e; font-weight: 900; font-size: 150px; }
+  #logo .t { color: #b7b7b7; font-weight: 800; font-size: 118px; letter-spacing: 4px; }
+  #logo .led { display: inline-flex; align-items: baseline; margin-left: 26px; }
+  #logo .l { color: #b7b7b7; font-weight: 800; font-size: 118px; }
+  #logo .ebars { display: inline-flex; flex-direction: column; gap: 9px; margin: 0 8px; transform: translateY(-2px); }
+  #logo .ebars i { display: block; width: 74px; height: 21px; border-radius: 3px; }
+  #logo .ebars i:nth-child(1) { background: #e8492e; }
+  #logo .ebars i:nth-child(2) { background: #4caf50; }
+  #logo .ebars i:nth-child(3) { background: #2196f3; }
+  #logo .d { color: #b7b7b7; font-weight: 800; font-size: 118px; }
+  #sub {
+    margin-top: 6px;
+    color: #f7941e;
+    font-weight: 700;
+    font-size: 56px;
+    letter-spacing: 16px;
+    text-transform: uppercase;
+    text-shadow: 0 4px 24px rgba(0,0,0,0.8);
+  }
+</style>
+</head>
+<body>
+  <div id="icon">
+    <!-- green screen layer: row of blocks top-right with a dropped part (like a remapped strip) -->
+    <div class="blk g1" style="left:392px; top:96px;  width:230px; height:230px;"></div>
+    <div class="blk g2" style="left:622px; top:96px;  width:230px; height:230px;"></div>
+    <div class="blk g1" style="left:852px; top:96px;  width:120px; height:230px;"></div>
+    <div class="blk g2" style="left:700px; top:326px; width:272px; height:210px;"></div>
+    <!-- purple screen layer: bottom-left -->
+    <div class="blk p1" style="left:52px;  top:462px; width:230px; height:230px;"></div>
+    <div class="blk p2" style="left:52px;  top:692px; width:230px; height:236px;"></div>
+    <div class="blk p1" style="left:282px; top:692px; width:230px; height:236px;"></div>
+    <div class="blk p2" style="left:512px; top:692px; width:236px; height:236px;"></div>
+    <!-- subtle alignment circles/diagonals -->
+    <div class="cross">
+      <svg viewBox="0 0 1024 1024">
+        <g stroke="rgba(255,255,255,0.35)" stroke-width="3" fill="none">
+          <circle cx="682" cy="316" r="200"/>
+          <circle cx="282" cy="695" r="200"/>
+          <line x1="392" y1="96" x2="972" y2="536"/>
+          <line x1="972" y1="96" x2="392" y2="536"/>
+          <line x1="52" y1="462" x2="748" y2="928"/>
+          <line x1="748" y1="462" x2="52" y2="928"/>
+        </g>
+      </svg>
+    </div>
+    <div id="brand">
+      <div class="row">
+        <span id="logo">
+          <span class="x">X</span><span class="t">TREME</span>
+          <span class="led">
+            <span class="l">L</span>
+            <span class="ebars"><i></i><i></i><i></i></span>
+            <span class="d">D</span>
+          </span>
+        </span>
+      </div>
+      <div id="sub">Remap Export</div>
+    </div>
+  </div>
+</body>
+</html>

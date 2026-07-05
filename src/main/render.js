@@ -1,9 +1,10 @@
 'use strict';
-// ffmpeg render-pipeline: stageview bron -> crop/scale/overlay per slice -> output canvas.
-// ProRes 422 HQ via prores_ks; DXV3 via de ffmpeg 'dxv' encoder (ffmpeg 7.1+, bv. Homebrew).
+// ffmpeg render pipeline: stageview source -> clip transform -> crop/rotate/flip/scale/overlay
+// per slice -> output canvas. ProRes 422 HQ via prores_ks; DXV3 via the bundled ffmpeg 8.
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const Geometry = require('../shared/geometry');
 
 let ffmpegStatic = null;
 try {
@@ -65,53 +66,76 @@ function getCapabilities(force) {
   return capsCache;
 }
 
-// Duur / fps / audio van een bronbestand bepalen via ffmpeg -i (geen ffprobe nodig).
+// Probe duration / fps / resolution / audio of a source file via ffmpeg -i.
 function probeMedia(ffPath, file) {
   const r = spawnSync(ffPath, ['-hide_banner', '-i', file], { encoding: 'utf8', timeout: 20000 });
   const err = (r.stderr || '') + (r.stdout || '');
-  const out = { durationSec: null, fps: null, hasAudio: /Stream #[^\n]*Audio/.test(err) };
+  const out = {
+    durationSec: null,
+    fps: null,
+    width: null,
+    height: null,
+    hasAudio: /Stream #[^\n]*Audio/.test(err),
+  };
   const dm = err.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
   if (dm) out.durationSec = parseInt(dm[1], 10) * 3600 + parseInt(dm[2], 10) * 60 + parseFloat(dm[3]);
   const fm = err.match(/(\d+(?:\.\d+)?)\s*fps/) || err.match(/(\d+(?:\.\d+)?)\s*tbr/);
   if (fm) out.fps = parseFloat(fm[1]);
+  const rm = err.match(/Video:[^\n]*?(\d{2,5})x(\d{2,5})/);
+  if (rm) {
+    out.width = parseInt(rm[1], 10);
+    out.height = parseInt(rm[2], 10);
+  }
   return out;
 }
 
-// Slices klemmen op de input canvas; output rect schaalt proportioneel mee.
-function effectiveSlices(project) {
-  const IW = Math.max(1, Math.round(project.input.width));
-  const IH = Math.max(1, Math.round(project.input.height));
-  const result = [];
-  for (const s of project.slices) {
-    if (s.enabled === false) continue;
-    const iw = s.in.w;
-    const ih = s.in.h;
-    if (iw <= 0 || ih <= 0 || s.out.w <= 0 || s.out.h <= 0) continue;
-    const x0 = Math.max(0, Math.min(IW, s.in.x));
-    const x1 = Math.max(0, Math.min(IW, s.in.x + iw));
-    const y0 = Math.max(0, Math.min(IH, s.in.y));
-    const y1 = Math.max(0, Math.min(IH, s.in.y + ih));
-    if (x1 - x0 < 1 || y1 - y0 < 1) continue;
-    const fx0 = (x0 - s.in.x) / iw;
-    const fx1 = (x1 - s.in.x) / iw;
-    const fy0 = (y0 - s.in.y) / ih;
-    const fy1 = (y1 - s.in.y) / ih;
-    result.push({
-      crop: {
-        x: Math.round(x0),
-        y: Math.round(y0),
-        w: Math.max(1, Math.round(x1 - x0)),
-        h: Math.max(1, Math.round(y1 - y0)),
-      },
-      place: {
-        x: Math.round(s.out.x + fx0 * s.out.w),
-        y: Math.round(s.out.y + fy0 * s.out.h),
-        w: Math.max(1, Math.round((fx1 - fx0) * s.out.w)),
-        h: Math.max(1, Math.round((fy1 - fy0) * s.out.h)),
-      },
-    });
+// Extract a single frame as PNG buffer (for the render page live preview).
+function extractFrame(src, timeSec) {
+  const caps = getCapabilities();
+  const ffPath = caps.proresPath;
+  if (!ffPath) throw new Error('ffmpeg not found');
+  const seek = timeSec > 0 ? ['-ss', String(timeSec)] : [];
+  const args = [
+    '-hide_banner', '-loglevel', 'error',
+    ...seek,
+    '-i', src,
+    '-frames:v', '1',
+    '-vf', "scale='min(1600,iw)':-2",
+    '-f', 'image2pipe', '-c:v', 'png', 'pipe:1',
+  ];
+  const r = spawnSync(ffPath, args, { timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0 || !r.stdout || !r.stdout.length) {
+    throw new Error('Frame extraction failed: ' + (r.stderr ? r.stderr.toString().slice(-500) : '?'));
   }
-  return result;
+  return 'data:image/png;base64,' + r.stdout.toString('base64');
+}
+
+const effectiveSlices = (project) => Geometry.effectiveSlices(project);
+
+// ffmpeg filter ops for slice content rotation (clockwise) + flip
+function contentOps(rot, flip) {
+  const ops = [];
+  if (rot === 90) ops.push('transpose=1');
+  else if (rot === 180) ops.push('hflip', 'vflip');
+  else if (rot === 270) ops.push('transpose=2');
+  if (flip & 1) ops.push('hflip');
+  if (flip & 2) ops.push('vflip');
+  return ops;
+}
+
+// Color/blur adjustment filters from a clip transform
+function adjustOps(t) {
+  const ops = [];
+  if (!t) return ops;
+  const b = t.brightness || 0;
+  const c = t.contrast || 0;
+  const s = t.saturation != null ? t.saturation : 1;
+  if (b !== 0 || c !== 0 || s !== 1) {
+    ops.push(`eq=brightness=${b.toFixed(4)}:contrast=${(1 + c).toFixed(4)}:saturation=${Math.max(0, s).toFixed(4)}`);
+  }
+  if (t.hue) ops.push(`hue=h=${t.hue.toFixed(2)}`);
+  if (t.blur > 0) ops.push(`gblur=sigma=${t.blur.toFixed(2)}`);
+  return ops;
 }
 
 function buildArgs(project, job, opts, probe) {
@@ -119,27 +143,50 @@ function buildArgs(project, job, opts, probe) {
   const IH = Math.max(1, Math.round(project.input.height));
   let OW = Math.max(2, Math.round(project.output.width));
   let OH = Math.max(2, Math.round(project.output.height));
-  if (OW % 2) OW += 1; // ProRes 4:2:2 vereist even breedte
+  if (OW % 2) OW += 1; // ProRes 4:2:2 requires even width
   if (OH % 2) OH += 1;
 
   const sl = effectiveSlices(project);
-  if (!sl.length) throw new Error('Geen actieve slices binnen de input canvas');
+  if (!sl.length) throw new Error('No enabled slices inside the input canvas');
 
   const isPng = opts.codec === 'png';
   const fps = job.isImage || isPng ? opts.fps || 50 : (probe && probe.fps) || 25;
   const dur = job.isImage && !isPng ? opts.imageDuration || 1 : null;
 
   const parts = [];
-  parts.push(`[0:v]scale=${IW}:${IH}:flags=bicubic,setsar=1[src]`);
+  const tr = job.transform;
+  if (!Geometry.isIdentityTransform(tr) && probe && probe.width && probe.height) {
+    // Clip transform: position / scale / rotate the source on the input canvas
+    const lay = Geometry.clipLayout(probe.width, probe.height, tr, IW, IH);
+    const bw = Math.max(2, Math.round(lay.bw));
+    const bh = Math.max(2, Math.round(lay.bh));
+    const chain = [`scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
+    if (tr.rotation) {
+      chain.push(
+        `rotate=${lay.angleRad.toFixed(6)}:ow=${Math.max(2, Math.ceil(lay.rw))}:oh=${Math.max(2, Math.ceil(lay.rh))}:c=black`
+      );
+    }
+    chain.push(...adjustOps(tr));
+    parts.push(`[0:v]${chain.join(',')}[clip]`);
+    parts.push(`color=c=black:s=${IW}x${IH}:r=${fps}[ibase]`);
+    parts.push(`[ibase][clip]overlay=${Math.round(lay.x)}:${Math.round(lay.y)}:shortest=1[src]`);
+  } else {
+    const chain = [`scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr)];
+    parts.push(`[0:v]${chain.join(',')}[src]`);
+  }
+
   if (sl.length > 1) {
     parts.push(`[src]split=${sl.length}${sl.map((_, i) => `[s${i}]`).join('')}`);
   } else {
     parts.push('[src]null[s0]');
   }
   sl.forEach((s, i) => {
-    parts.push(
-      `[s${i}]crop=${s.crop.w}:${s.crop.h}:${s.crop.x}:${s.crop.y},scale=${s.place.w}:${s.place.h}:flags=bicubic[c${i}]`
-    );
+    const ops = [
+      `crop=${s.crop.w}:${s.crop.h}:${s.crop.x}:${s.crop.y}`,
+      ...contentOps(s.rot, s.flip),
+      `scale=${s.place.w}:${s.place.h}:flags=bicubic`,
+    ];
+    parts.push(`[s${i}]${ops.join(',')}[c${i}]`);
   });
   parts.push(`color=c=black:s=${OW}x${OH}:r=${fps}[base]`);
   let prev = 'base';
@@ -150,8 +197,14 @@ function buildArgs(project, job, opts, probe) {
     prev = outLabel;
   });
 
-  const inputArgs =
-    job.isImage && !isPng ? ['-loop', '1', '-t', String(dur), '-i', job.src] : ['-i', job.src];
+  let inputArgs;
+  if (job.isImage && !isPng) {
+    inputArgs = ['-loop', '1', '-t', String(dur), '-i', job.src];
+  } else if (isPng && !job.isImage && job.pngTime > 0) {
+    inputArgs = ['-ss', String(job.pngTime), '-i', job.src]; // still from the chosen preview time
+  } else {
+    inputArgs = ['-i', job.src];
+  }
   let codecArgs;
   if (isPng) {
     codecArgs = ['-frames:v', '1']; // png encoder volgt uit .png extensie
@@ -216,9 +269,9 @@ function runFfmpeg(ffPath, args, durationSec, onProgress) {
     });
     proc.on('close', (code) => {
       currentProc = null;
-      if (cancelled) return reject(new Error('Geannuleerd'));
+      if (cancelled) return reject(new Error('Cancelled'));
       if (code === 0) return resolve();
-      reject(new Error(`ffmpeg fout (code ${code}):\n${stderrTail}`));
+      reject(new Error(`ffmpeg error (code ${code}):\n${stderrTail}`));
     });
   });
 }
@@ -239,8 +292,8 @@ async function startBatch(win, payload) {
   if (!ffPath) {
     throw new Error(
       codec === 'dxv'
-        ? 'Geen ffmpeg met DXV-encoder gevonden. Installeer ffmpeg 7.1+ (brew install ffmpeg).'
-        : 'ffmpeg niet gevonden'
+        ? 'No ffmpeg with DXV encoder found (bin/ffmpeg-dxv missing?).'
+        : 'ffmpeg not found'
     );
   }
 
@@ -250,7 +303,7 @@ async function startBatch(win, payload) {
     const job = jobs[i];
     send(win, { type: 'job-start', index: i, total: jobs.length, file: job.src });
     try {
-      const probe = job.isImage ? null : probeMedia(ffPath, job.src);
+      const probe = probeMedia(ffPath, job.src);
       const { args, durationSec } = buildArgs(project, job, { codec, fps, imageDuration }, probe);
       await runFfmpeg(ffPath, args, durationSec, (pct) =>
         send(win, { type: 'progress', index: i, total: jobs.length, percent: pct })
@@ -279,4 +332,13 @@ function cancel() {
   }
 }
 
-module.exports = { getCapabilities, probeMedia, effectiveSlices, buildArgs, runFfmpeg, startBatch, cancel };
+module.exports = {
+  getCapabilities,
+  probeMedia,
+  extractFrame,
+  effectiveSlices,
+  buildArgs,
+  runFfmpeg,
+  startBatch,
+  cancel,
+};

@@ -6,6 +6,32 @@ const renderMod = require('./src/main/render');
 
 let win = null;
 const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
+const makeIconArg = process.argv.find((a) => a.startsWith('--makeicon='));
+
+function makeIcon() {
+  const outPng = makeIconArg.slice('--makeicon='.length);
+  const iconWin = new BrowserWindow({
+    width: 1024,
+    height: 1024,
+    show: false,
+    frame: false,
+    transparent: true,
+    webPreferences: { offscreen: true },
+  });
+  iconWin.loadFile(path.join(__dirname, 'tools/icon.html'));
+  iconWin.webContents.once('did-finish-load', () => {
+    setTimeout(async () => {
+      try {
+        const img = await iconWin.webContents.capturePage({ x: 0, y: 0, width: 1024, height: 1024 });
+        fs.writeFileSync(outPng, img.toPNG());
+        console.log('Icon saved:', outPng);
+      } catch (e) {
+        console.error('Icon capture failed:', e);
+      }
+      app.quit();
+    }, 800);
+  });
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -22,7 +48,11 @@ function createWindow() {
     },
   });
 
-  const loadOpts = screenshotArg ? { query: { demo: '1' } } : undefined;
+  const pageArg = process.argv.find((a) => a.startsWith('--page='));
+  const query = {};
+  if (screenshotArg) query.demo = '1';
+  if (pageArg) query.page = pageArg.slice('--page='.length);
+  const loadOpts = Object.keys(query).length ? { query } : undefined;
   win.loadFile(path.join(__dirname, 'src/renderer/index.html'), loadOpts);
 
   if (screenshotArg) {
@@ -42,7 +72,18 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  if (makeIconArg) return makeIcon();
+  const iconPng = path.join(__dirname, 'build/icon.png');
+  if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
+    try {
+      app.dock.setIcon(iconPng);
+    } catch (e) {
+      /* icon optional */
+    }
+  }
+  createWindow();
+});
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -113,3 +154,9 @@ ipcMain.handle('path:join', (e, ...parts) => path.join(...parts));
 ipcMain.handle('ffmpeg:caps', () => renderMod.getCapabilities());
 ipcMain.handle('render:start', (e, payload) => renderMod.startBatch(win, payload));
 ipcMain.handle('render:cancel', () => renderMod.cancel());
+ipcMain.handle('preview:probe', (e, src) => {
+  const caps = renderMod.getCapabilities();
+  if (!caps.proresPath) throw new Error('ffmpeg not found');
+  return renderMod.probeMedia(caps.proresPath, src);
+});
+ipcMain.handle('preview:frame', (e, src, timeSec) => renderMod.extractFrame(src, timeSec || 0));

@@ -22,7 +22,8 @@
     "productName": "XtremeLED Remap Export",
     "mac": {
       "category": "public.app-category.video",
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "build/icon.icns"
     },
     "win": {
       "target": "nsis"
