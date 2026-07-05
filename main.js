@@ -13,6 +13,102 @@ const makeIconArg = process.argv.find((a) => a.startsWith('--makeicon='));
 const makeHeroArg = process.argv.find((a) => a.startsWith('--makehero='));
 const makePosterArg = process.argv.find((a) => a.startsWith('--makeposter='));
 const makeVideoArg = process.argv.find((a) => a.startsWith('--makevideo='));
+const shootArg = process.argv.find((a) => a.startsWith('--shoot='));
+const makeTutArg = process.argv.find((a) => a.startsWith('--maketut='));
+
+// Render tools/tutorial-build.html frame-by-frame to a folder of PNGs (1920x1080 @ 30fps)
+function makeTut() {
+  const outDir = makeTutArg.slice('--maketut='.length);
+  fs.mkdirSync(outDir, { recursive: true });
+  const FPS = 30;
+  const w = new BrowserWindow({
+    width: 1920,
+    height: 1080,
+    show: false,
+    frame: false,
+    webPreferences: { offscreen: true },
+  });
+  w.loadFile(path.join(__dirname, 'tools/tutorial-build.html'), { query: { capture: '1' } });
+  w.webContents.once('did-finish-load', async () => {
+    for (let i = 0; i < 200; i++) {
+      const ready = await w.webContents.executeJavaScript('window.__ready === true').catch(() => false);
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const dur = await w.webContents.executeJavaScript('window.__DUR').catch(() => 150);
+    const total = Math.round(dur * FPS);
+    console.log(`Rendering ${total} tutorial frames (${dur.toFixed(1)}s @ ${FPS}fps)…`);
+    for (let i = 0; i < total; i++) {
+      const t = i / FPS;
+      await w.webContents.executeJavaScript(`window.__seek(${t})`);
+      const img = await w.webContents.capturePage({ x: 0, y: 0, width: 1920, height: 1080 });
+      fs.writeFileSync(path.join(outDir, `frame_${String(i).padStart(5, '0')}.jpg`), img.toJPEG(94));
+      if (i % 60 === 0) console.log(`  ${i}/${total}`);
+    }
+    console.log('TUT_FRAMES_DONE', total, FPS);
+    app.quit();
+  });
+}
+
+// Capture a set of real app-state screenshots for the tutorial (to shootArg dir)
+function shootTutorial() {
+  const outDir = shootArg.slice('--shoot='.length);
+  fs.mkdirSync(outDir, { recursive: true });
+  const win2 = new BrowserWindow({
+    width: 1600,
+    height: 1000,
+    show: false,
+    backgroundColor: '#1d2022',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win2.webContents.executeJavaScript(code).catch(() => null);
+  const shot = async (name) => {
+    const img = await win2.webContents.capturePage();
+    fs.writeFileSync(path.join(outDir, name + '.png'), img.toPNG());
+    console.log('SHOT', name);
+  };
+  win2.loadFile(path.join(__dirname, 'src/renderer/index.html'), { query: { demo: '1' } });
+  win2.webContents.once('did-finish-load', async () => {
+    for (let i = 0; i < 100; i++) {
+      if (await js('window.__demoReady === true')) break;
+      await wait(50);
+    }
+    await wait(600);
+    await js('window.__demoApi.viewInput()');
+    await wait(400);
+    await shot('editor-input');
+    await js('window.__demoApi.selectSlice(1)');
+    await wait(400);
+    await shot('editor-slice');
+    await js('window.__demoApi.viewOutput()');
+    await wait(500);
+    await shot('editor-output');
+    // Export page with test-pattern footage + preview
+    await js('window.__demoApi.addTestFootage()');
+    // wait for ffmpeg preview frame
+    for (let i = 0; i < 60; i++) {
+      if (await js('window.__demoApi.hasPreview()')) break;
+      await wait(150);
+    }
+    await wait(500);
+    await js('window.__demoApi.rpInput()');
+    await wait(400);
+    await shot('export-input');
+    await js("window.__demoApi.setCodec('dxv')");
+    await wait(300);
+    await shot('export-codec');
+    await js('window.__demoApi.rpOutput()');
+    await wait(500);
+    await shot('export-output');
+    console.log('SHOOT_DONE');
+    app.quit();
+  });
+}
 
 // Render tools/promo.html frame-by-frame to a folder of PNGs (1080x1920 @ 30fps)
 function makeVideo() {
@@ -165,6 +261,8 @@ app.whenReady().then(() => {
   if (makeHeroArg) return makeHero();
   if (makePosterArg) return makePoster();
   if (makeVideoArg) return makeVideo();
+  if (shootArg) return shootTutorial();
+  if (makeTutArg) return makeTut();
   const iconPng = path.join(__dirname, 'build/icon.png');
   if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
     try {

@@ -4,10 +4,11 @@
 // Pure synthesis — no samples, no copyright.
 const fs = require('fs');
 
+const CALM = process.argv.includes('--calm');
 const SR = 44100;
-const DUR = 16;
+const DUR = CALM ? Number(process.env.BEAT_DUR || 141) : 16;
 const N = SR * DUR;
-const BPM = 120;
+const BPM = CALM ? 100 : 120;
 const beat = 60 / BPM;      // 0.5s
 const bar = beat * 4;       // 2s
 const L = new Float64Array(N);
@@ -62,6 +63,13 @@ function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed /
 
 // section gains: intro(0-2s) sparse, build(2-8), full(8-14), climax riser(14-16)
 function sectionMix(tSec) {
+  if (CALM) {
+    // gentle, consistent bed for the tutorial — soft kick, mellow chords, light arp
+    const intro = clamp(tSec / 4, 0, 1);
+    const outro = 1 - clamp((tSec - (DUR - 4)) / 4, 0, 1);
+    const e = intro * outro;
+    return { kick: 0.5 * e, bass: 0.7 * e, hat: 0.35 * e, chord: 0.9 * e, arp: 0.45 * e, clap: 0.0 };
+  }
   if (tSec < 2) return { kick: 0.6, bass: 0.5, hat: 0.3, chord: 0.5, arp: 0.0, clap: 0.0 };
   if (tSec < 4) return { kick: 1.0, bass: 0.9, hat: 0.7, chord: 0.7, arp: 0.4, clap: 0.6 };
   if (tSec < 14) return { kick: 1.0, bass: 1.0, hat: 1.0, chord: 0.85, arp: 0.9, clap: 1.0 };
@@ -140,8 +148,8 @@ for (let i = 0; i < N; i++) {
     s += a * env * 0.16 * mix.arp * sc;
   }
 
-  // ---- riser sweep in the last 2 bars (14-16s) into the CTA ----
-  if (t >= 14) {
+  // ---- riser sweep in the last 2 bars (14-16s) into the CTA (promo only) ----
+  if (!CALM && t >= 14) {
     const p = (t - 14) / 2; // 0..1
     const cutoff = 400 + p * p * 9000;
     let nz = lp(lpRise, rnd(), cutoff);
@@ -151,8 +159,8 @@ for (let i = 0; i < N; i++) {
     const tone = Math.sin(2 * Math.PI * (300 + p * 1400) * t) * 0.08 * swell;
     s += tone;
   }
-  // impact on the CTA hit at ~13.7-14 (downbeat of bar 8)
-  {
+  // impact on the CTA hit at ~13.7-14 (downbeat of bar 8) — promo only
+  if (!CALM) {
     const tImpact = t - 14;
     if (tImpact >= 0 && tImpact < 0.5) {
       const env = expEnv(tImpact, 0.25);

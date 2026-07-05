@@ -2976,4 +2976,45 @@ window.addEventListener('DOMContentLoaded', async () => {
   refreshCodecUI();
 
   if (params.get('page') === 'render') switchPage('render');
+
+  // Tour/screenshot hooks — only when launched with ?demo=1 (used by tools/--shoot)
+  if (params.get('demo') === '1') {
+    window.__demoApi = {
+      goEditor: () => switchPage('editor'),
+      goExport: () => switchPage('render'),
+      viewInput: () => switchView('input'),
+      viewOutput: () => switchView('output'),
+      selectSlice: (i) => {
+        const s = project.slices[i];
+        if (!s) return;
+        selId = s.id;
+        refreshSliceList();
+        refreshProps();
+        draw();
+      },
+      addTestFootage: async () => {
+        await addTestPattern(); // switches to Export page and adds the test pattern
+      },
+      rpInput: () => {
+        rp.viewMode = 'input';
+        $('rp-tab-input').classList.add('active');
+        $('rp-tab-output').classList.remove('active');
+        fitRenderView();
+        drawRenderPreview();
+      },
+      rpOutput: () => {
+        rp.viewMode = 'output';
+        $('rp-tab-output').classList.add('active');
+        $('rp-tab-input').classList.remove('active');
+        fitRenderView();
+        drawRenderPreview();
+      },
+      setCodec: (id) => { $('r-codec').value = id; refreshCodecUI(); },
+      hasPreview: () => {
+        const f = activeFile();
+        return !!(f && f.frameImg);
+      },
+    };
+    window.__demoReady = true;
+  }
 });
