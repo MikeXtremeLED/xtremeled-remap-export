@@ -9,6 +9,12 @@
   <sub>macOS (Intel & Apple Silicon) · Windows · Free & open source · Built for real-world LED shows by <a href="https://www.xtremeled.nl/">XtremeLED</a></sub>
 </p>
 
+<p align="center">
+  <a href="https://www.paypal.com/donate/?business=Moonmikejack%40hotmail.com&no_recurring=0&item_name=Support+XtremeLED+Remap+Export&currency_code=EUR">
+    <img src="https://img.shields.io/badge/☕_Buy_me_a_coffee-PayPal-FFDD00?style=for-the-badge&logo=paypal&logoColor=00457C" alt="Buy me a coffee via PayPal" />
+  </a>
+</p>
+
 ![Stageview content → XtremeLED Remap Export → output mapped](docs/hero.png)
 
 ---
@@ -140,6 +146,12 @@ npx electron-builder --win --x64
 - Sources with a different resolution than the input canvas can be fitted/filled/positioned per
   clip; with "Stretch" (default) they're stretched to the canvas.
 - Output dimensions are rounded to even numbers where the codec requires it.
+
+## Support this project ☕
+
+XtremeLED Remap Export is free and open source, built in spare time for the LED community.
+If it saved you a media server rental (or just some stress on a show), you can
+[**buy me a coffee via PayPal**](https://www.paypal.com/donate/?business=Moonmikejack%40hotmail.com&no_recurring=0&item_name=Support+XtremeLED+Remap+Export&currency_code=EUR) — much appreciated! 🧡
 
 ## Credits
 
