@@ -15,21 +15,24 @@ npm start          # or double-click "XtremeLED Remap Export.command"
 1. **Input canvas** = the resolution of your stageview canvas (e.g. 10400×416 for a 50×2m P4.81 screen).
 2. **Output canvas** = the resolution of your final output (e.g. 3840×2160).
 3. Create **slices**: each slice has an *input rect* (where it samples the stageview) and an *output rect* (where it lands on the output) — just like Resolume Advanced Output.
-4. **Render**: pick stageview footage → the app cuts and places everything automatically.
+4. **Export**: pick stageview footage → the app cuts and places everything automatically.
 
 ## Features
 
 - **Import / Export XML** — full round-trip with Resolume Advanced Output XML, including **input masks**, **rotation** (orientation) and **flip**.
-- **Input masks** — per slice, exactly like Resolume: enable in the Slice panel, edit numerically or directly on canvas ("Edit on canvas").
+- **Input masks with key points** — per slice, exactly like Resolume: polygon masks with draggable points (double-click an edge to add, right-click a point to remove), editable numerically too. Full XML round-trip.
 - **Rotation & flip** — 90° rotation steps on input and output rects; flip (H/V/both) with pac-man indicator button.
 - **Split rows** — cut a wide slice (e.g. a 50m×1m screen) into rows on the output canvas, with live summary of what you'll get.
 - **Undo / redo** — ⌘Z / ⇧⌘Z or the toolbar buttons.
 - **Reference images** — underlay for the Input Map; the Output Map shows a live preview of the mapped content.
-- **Render page** — full-page workflow:
-  - Add footage (images/videos), each with its own **clip transform**: fit mode, position, scale, rotation, brightness, contrast, saturation, hue, blur — with a **live preview frame** on the input map and a **timeline scrubber** for videos.
-  - **Apple ProRes 422 HQ** (.mov), **DXV3** (.mov, bundled ffmpeg 8) or **PNG still** (for PowerPoint; videos use the chosen preview frame).
-  - Images render as 1 second of video (duration/fps configurable, default 50 fps).
-  - Audio from video sources is kept (PCM).
+- **Multiple screens (outputs)** — manage screens in the Project panel; each slice is assigned to a screen; exports produce one file per screen.
+- **Export page** — full-page workflow:
+  - Footage list with per-file selection checkboxes; **test pattern generator** (renders slice names/grid at input canvas size); **watch folder** with auto-export of new files.
+  - Per clip: **transform** (fit mode, position, scale, rotation) and **color** (brightness, contrast, saturation, hue, blur) with live preview — Input *and* Output view — plus a timeline scrubber with **in/out trim markers** (keys: I / O).
+  - **Codecs**: ProRes 422 Proxy/LT/422/HQ, ProRes 4444 (with/only alpha), DXV3, HAP Standard/Q (HAP alpha), HEVC/H.265 (8/10/12-bit, bitrate), H.264, PNG still (8/16-bit) and PNG sequence (written into its own folder). Codec name is part of the output filename.
+  - **Remap same as source** matches codec, bit depth and bitrate of the source footage.
+  - Right-click any slider to reset it to its default (like Resolume).
+  - Images render as 1 second of video (duration/fps configurable); audio from video sources is kept.
 - **Project save/open** (`.xreproj`), session auto-restore, drag & drop everywhere.
 
 ### Editor controls

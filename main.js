@@ -2,7 +2,10 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const renderMod = require('./src/main/render');
+
+app.setName('XtremeLED Remap Export');
 
 let win = null;
 const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
@@ -139,6 +142,16 @@ ipcMain.handle('file:writeText', (e, p, text) => {
   return true;
 });
 
+// Write a dataURL (e.g. rasterized mask / test pattern PNG) to a temp file, returns the path
+ipcMain.handle('file:writeTempDataUrl', (e, name, dataUrl) => {
+  const m = String(dataUrl).match(/^data:[^;]+;base64,(.+)$/s);
+  if (!m) throw new Error('Invalid dataURL');
+  const safe = String(name).replace(/[^\w.-]/g, '_');
+  const p = path.join(os.tmpdir(), `xre-${Date.now()}-${safe}`);
+  fs.writeFileSync(p, Buffer.from(m[1], 'base64'));
+  return p;
+});
+
 ipcMain.handle('shell:showInFolder', (e, p) => {
   shell.showItemInFolder(p);
 });
@@ -160,3 +173,65 @@ ipcMain.handle('preview:probe', (e, src) => {
   return renderMod.probeMedia(caps.proresPath, src);
 });
 ipcMain.handle('preview:frame', (e, src, timeSec) => renderMod.extractFrame(src, timeSec || 0));
+
+// ---------------- watch folder ----------------
+const MEDIA_EXTS = new Set([
+  'png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp', 'webp', 'gif',
+  'mov', 'mp4', 'm4v', 'avi', 'mkv', 'mxf', 'webm', 'mpg', 'mpeg',
+]);
+let watcher = null;
+const watchPending = new Map(); // path -> {size, timer}
+
+function stopWatch() {
+  if (watcher) {
+    try { watcher.close(); } catch (e) { /* closed */ }
+    watcher = null;
+  }
+  for (const p of watchPending.values()) clearTimeout(p.timer);
+  watchPending.clear();
+}
+
+// Wait until the file size is stable (copy finished), then notify the renderer
+function scheduleStableCheck(fullPath) {
+  const check = () => {
+    let size = -1;
+    try {
+      size = fs.statSync(fullPath).size;
+    } catch (e) {
+      watchPending.delete(fullPath);
+      return;
+    }
+    const prev = watchPending.get(fullPath);
+    if (prev && prev.size === size && size > 0) {
+      watchPending.delete(fullPath);
+      if (win && !win.isDestroyed()) win.webContents.send('watch:file', fullPath);
+    } else {
+      watchPending.set(fullPath, { size, timer: setTimeout(check, 900) });
+    }
+  };
+  const existing = watchPending.get(fullPath);
+  if (existing) clearTimeout(existing.timer);
+  watchPending.set(fullPath, { size: -2, timer: setTimeout(check, 900) });
+}
+
+ipcMain.handle('watch:start', (e, dir) => {
+  stopWatch();
+  const existing = new Set(fs.readdirSync(dir));
+  watcher = fs.watch(dir, (event, filename) => {
+    if (!filename) return;
+    const ext = path.extname(filename).toLowerCase().replace('.', '');
+    if (!MEDIA_EXTS.has(ext)) return;
+    if (filename.startsWith('.')) return;
+    const fullPath = path.join(dir, filename);
+    if (existing.has(filename) && !watchPending.has(fullPath)) return;
+    existing.add(filename);
+    if (!fs.existsSync(fullPath)) return;
+    scheduleStableCheck(fullPath);
+  });
+  return true;
+});
+
+ipcMain.handle('watch:stop', () => {
+  stopWatch();
+  return true;
+});

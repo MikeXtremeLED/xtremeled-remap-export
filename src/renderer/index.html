@@ -9,7 +9,7 @@
 <body>
   <header id="toolbar">
     <div class="brand">
-      <span class="logo"><b class="x">X</b>TREME <span class="led">L<span class="ebars"><i></i><i></i><i></i></span>D</span></span>
+      <span class="logo"><b class="x">X</b><span class="t">TREME</span><span class="led">L<span class="ebars"><i></i><i></i><i></i></span>D</span></span>
       <span class="app-name">Remap Export</span>
     </div>
     <div class="tb-group" id="tb-editor-left">
@@ -32,6 +32,7 @@
       <button id="tab-input" class="tab active">Input Map</button>
       <button id="tab-output" class="tab">Output Map</button>
     </div>
+    <select id="screen-select" class="hidden" title="Active screen"></select>
     <div class="tb-group zoom">
       <button id="btn-zoom-out" title="Zoom out">−</button>
       <span id="zoom-label">100%</span>
@@ -39,7 +40,7 @@
       <button id="btn-zoom-fit" title="Zoom to fit">Fit</button>
     </div>
     <div class="spacer"></div>
-    <button id="btn-render" class="accent">Render</button>
+    <button id="btn-render" class="accent">Export</button>
     <button id="btn-back-editor" class="accent hidden">← Mapping</button>
   </header>
 
@@ -74,7 +75,13 @@
             <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
             <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
           </div>
-          <div class="subtitle">Output canvas</div>
+          <div class="subtitle">Screens (outputs)</div>
+          <div class="row">
+            <select id="p-screen-select" style="flex:1"></select>
+            <button id="p-screen-add" title="Add screen">+</button>
+            <button id="p-screen-del" class="danger" title="Delete screen">✕</button>
+          </div>
+          <div class="row"><label>Name</label><input type="text" id="scr-name" /></div>
           <div class="row2">
             <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
             <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
@@ -90,14 +97,18 @@
           <div class="row"><span id="ref-name" class="dim">no image</span></div>
           <div class="row">
             <label>Opacity</label>
-            <input type="range" id="ref-opacity" min="0" max="100" value="60" />
+            <input type="range" id="ref-opacity" min="0" max="100" value="60" data-default="60" />
           </div>
         </div>
 
         <div class="section" id="slice-props">
           <div class="panel-title">Slice</div>
           <div class="row"><label>Name</label><input type="text" id="sl-name" /></div>
-          <div class="row"><label>Enabled</label><input type="checkbox" id="sl-enabled" /></div>
+          <div class="row">
+            <label>Enabled</label><input type="checkbox" id="sl-enabled" />
+            <label style="min-width:auto">Screen</label>
+            <select id="sl-screen" style="flex:1"></select>
+          </div>
 
           <div class="subtitle">Input rect</div>
           <div class="row4">
@@ -134,7 +145,7 @@
             </button>
           </div>
 
-          <div class="subtitle">Input mask</div>
+          <div class="subtitle">Input mask (key points)</div>
           <div class="row">
             <label>Enabled</label><input type="checkbox" id="mask-enabled" />
             <label style="min-width:auto">Edit on canvas</label><input type="checkbox" id="mask-edit" />
@@ -145,6 +156,7 @@
             <label>W</label><input type="number" id="mask-w" class="num" />
             <label>H</label><input type="number" id="mask-h" class="num" />
           </div>
+          <div class="note">In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it.</div>
           <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
         </div>
 
@@ -155,22 +167,39 @@
       </aside>
     </div>
 
-    <!-- ======================= RENDER PAGE ======================= -->
+    <!-- ======================= EXPORT PAGE ======================= -->
     <div id="render-page" class="hidden">
       <aside id="rp-left">
         <div class="panel-title">Footage</div>
         <div id="rp-files"></div>
-        <div class="left-buttons one-col">
-          <button id="rp-add">+ Add footage…</button>
+        <div class="left-buttons">
+          <button id="rp-add">+ Footage…</button>
+          <button id="rp-testpattern" title="Generate a test pattern at input canvas size">+ Test pattern</button>
+          <button id="rp-select-all">Select all</button>
           <button id="rp-remove" class="danger">Remove</button>
         </div>
       </aside>
 
       <div id="rp-center">
+        <div id="rp-viewbar">
+          <div class="tabs">
+            <button id="rp-tab-input" class="tab active">Input view</button>
+            <button id="rp-tab-output" class="tab">Output view</button>
+          </div>
+          <select id="rp-screen-select" class="hidden" title="Screen to preview"></select>
+        </div>
         <canvas id="rp-canvas"></canvas>
         <div id="rp-timeline">
           <button id="rp-refresh" title="Refresh preview frame">⟳</button>
-          <input type="range" id="rp-time" min="0" max="0" step="0.04" value="0" />
+          <button id="rp-set-in" title="Set in point at current time">[ In</button>
+          <div class="tl-wrap">
+            <div id="tl-range"></div>
+            <input type="range" id="rp-time" min="0" max="0" step="0.04" value="0" />
+            <div id="tl-in" class="tl-marker in hidden"></div>
+            <div id="tl-out" class="tl-marker out hidden"></div>
+          </div>
+          <button id="rp-set-out" title="Set out point at current time">Out ]</button>
+          <button id="rp-clear-trim" title="Clear in/out points">✕</button>
           <span id="rp-timelabel" class="dim">0.00 s</span>
         </div>
       </div>
@@ -191,15 +220,15 @@
             <label style="width:56px">Pos X</label><input type="number" id="ct-x" class="num" value="0" />
             <label style="width:14px">Y</label><input type="number" id="ct-y" class="num" value="0" />
           </div>
-          <div class="row slider-row"><label>Scale</label><input type="range" id="ct-scale" min="1" max="400" value="100" /><input type="number" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span></div>
-          <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" /><input type="number" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
+          <div class="row slider-row"><label>Scale</label><input type="range" id="ct-scale" min="1" max="400" value="100" data-default="100" /><input type="number" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span></div>
+          <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" data-default="0" /><input type="number" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
 
-          <div class="subtitle">Color</div>
-          <div class="row slider-row"><label>Bright</label><input type="range" id="ct-bright" min="-100" max="100" value="0" /><span id="ct-bright-v" class="dim val">0</span></div>
-          <div class="row slider-row"><label>Contrast</label><input type="range" id="ct-contrast" min="-100" max="100" value="0" /><span id="ct-contrast-v" class="dim val">0</span></div>
-          <div class="row slider-row"><label>Saturation</label><input type="range" id="ct-sat" min="0" max="200" value="100" /><span id="ct-sat-v" class="dim val">1.0</span></div>
-          <div class="row slider-row"><label>Hue</label><input type="range" id="ct-hue" min="-180" max="180" value="0" /><span id="ct-hue-v" class="dim val">0°</span></div>
-          <div class="row slider-row"><label>Blur</label><input type="range" id="ct-blur" min="0" max="50" value="0" /><span id="ct-blur-v" class="dim val">0</span></div>
+          <div class="subtitle">Color <span class="dim">(right-click a slider = reset)</span></div>
+          <div class="row slider-row"><label>Bright</label><input type="range" id="ct-bright" min="-100" max="100" value="0" data-default="0" /><span id="ct-bright-v" class="dim val">0</span></div>
+          <div class="row slider-row"><label>Contrast</label><input type="range" id="ct-contrast" min="-100" max="100" value="0" data-default="0" /><span id="ct-contrast-v" class="dim val">0</span></div>
+          <div class="row slider-row"><label>Saturation</label><input type="range" id="ct-sat" min="0" max="200" value="100" data-default="100" /><span id="ct-sat-v" class="dim val">1.0</span></div>
+          <div class="row slider-row"><label>Hue</label><input type="range" id="ct-hue" min="-180" max="180" value="0" data-default="0" /><span id="ct-hue-v" class="dim val">0°</span></div>
+          <div class="row slider-row"><label>Blur</label><input type="range" id="ct-blur" min="0" max="50" value="0" data-default="0" /><span id="ct-blur-v" class="dim val">0</span></div>
           <div class="row">
             <button id="ct-reset">Reset clip</button>
             <button id="ct-apply-all">Apply to all</button>
@@ -207,15 +236,36 @@
         </div>
 
         <div class="section">
-          <div class="panel-title">Render settings</div>
-          <div class="row"><label>Codec</label></div>
-          <div class="radio-col">
-            <label><input type="radio" name="r-codec" value="prores" checked /> Apple ProRes 422 HQ (.mov)</label>
-            <label id="dxv-radio-row"><input type="radio" name="r-codec" value="dxv" /> DXV3 (.mov)</label>
-            <label><input type="radio" name="r-codec" value="png" /> PNG still (.png)</label>
+          <div class="panel-title">Export settings</div>
+          <div class="row">
+            <label>Codec</label>
+            <select id="r-codec" style="flex:1"></select>
           </div>
-          <div class="note">PNG exports one remapped frame — ideal for PowerPoint. For video footage the current preview time is used.</div>
-          <div class="row2">
+          <div class="row">
+            <label>Alpha</label>
+            <select id="r-alpha">
+              <option value="none">No alpha</option>
+              <option value="straight">With alpha</option>
+              <option value="only">Only alpha</option>
+            </select>
+            <label style="min-width:auto">Depth</label>
+            <select id="r-depth">
+              <option value="8">8-bit</option>
+              <option value="10">10-bit</option>
+              <option value="12">12-bit</option>
+              <option value="16">16-bit</option>
+            </select>
+          </div>
+          <div class="row" id="r-bitrate-row">
+            <label>Bitrate</label>
+            <input type="number" id="r-bitrate" class="num" style="width:70px" min="1" max="400" placeholder="auto" />
+            <span class="dim">Mbps (empty = quality mode)</span>
+          </div>
+          <div class="row">
+            <button id="r-same-as-source" title="Match codec, bit depth and bitrate of the selected footage">Remap same as source</button>
+          </div>
+          <div id="r-codec-note" class="note"></div>
+          <div class="row2" id="r-still-row">
             <label style="width:80px">Still FPS</label><input type="number" id="r-fps" class="num" value="50" min="1" max="240" />
             <label style="width:88px">Still length</label><input type="number" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
           </div>
@@ -227,7 +277,20 @@
         </div>
 
         <div class="section">
-          <button id="r-start" class="accent big" disabled>Start render</button>
+          <div class="panel-title">Watch folder</div>
+          <div class="row">
+            <button id="w-choose">Choose folder…</button>
+            <button id="w-toggle" disabled>Start</button>
+          </div>
+          <div class="row"><span id="w-dir" class="dim ellip">no folder</span></div>
+          <div class="row">
+            <label style="min-width:auto">Auto export new files</label>
+            <input type="checkbox" id="w-auto" checked />
+          </div>
+        </div>
+
+        <div class="section">
+          <button id="r-start" class="accent big" disabled>Start export</button>
           <div class="progress-wrap" id="r-progress" style="display:none">
             <div class="progress-bar"><div id="r-bar"></div></div>
             <div class="progress-label"><span id="r-plabel"></span><span id="r-ppct"></span></div>
@@ -244,6 +307,7 @@
   <script src="../shared/sxml.js"></script>
   <script src="../shared/resolume.js"></script>
   <script src="../shared/geometry.js"></script>
+  <script src="../shared/codecs.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

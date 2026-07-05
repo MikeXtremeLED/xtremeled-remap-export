@@ -1,5 +1,5 @@
 'use strict';
-/* XtremeLED Remap Export — slice editor + render page */
+/* XtremeLED Remap Export — slice editor + export page */
 
 const api = window.xre;
 const $ = (id) => document.getElementById(id);
@@ -9,6 +9,7 @@ let project = null;
 let page = 'editor'; // 'editor' | 'render'
 let view = 'input'; // 'input' | 'output'
 let selId = null;
+let activeScreenId = null;
 let caps = null;
 let maskEdit = false;
 const refImgs = { input: null, output: null };
@@ -37,15 +38,29 @@ const HANDLE_CURSORS = {
 };
 
 // ---------------- helpers ----------------
+function screens() {
+  return project.screens;
+}
+function activeScreen() {
+  return project.screens.find((s) => s.id === activeScreenId) || project.screens[0];
+}
+function sliceScreenId(s) {
+  return s.screenId || project.screens[0].id;
+}
 function worldSize(v) {
-  const c = v === 'input' ? project.input : project.output;
-  return { w: c.width, h: c.height };
+  if (v === 'input') return { w: project.input.width, h: project.input.height };
+  const sc = activeScreen();
+  return { w: sc.width, h: sc.height };
 }
 function sliceRect(s, v) {
   return v === 'input' ? s.in : s.out;
 }
 function selected() {
   return project.slices.find((s) => s.id === selId) || null;
+}
+function visibleSlices(v) {
+  if (v === 'input') return project.slices;
+  return project.slices.filter((s) => sliceScreenId(s) === activeScreen().id);
 }
 function extOf(p) {
   const m = String(p).toLowerCase().match(/\.([a-z0-9]+)$/);
@@ -60,6 +75,12 @@ function clampInt(v, min, max) {
 }
 function baseName(p) {
   return String(p).split('/').pop();
+}
+function sanitizeName(s) {
+  return String(s).replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
+}
+function maskUsable(s) {
+  return s.mask && s.mask.enabled && s.mask.points && s.mask.points.length >= 3;
 }
 
 // ---------------- undo / redo ----------------
@@ -83,6 +104,7 @@ function pushHistoryThrottled(ms) {
 async function restoreSnapshot(json) {
   project = migrateProject(JSON.parse(json));
   if (selId && !project.slices.some((s) => s.id === selId)) selId = null;
+  if (!project.screens.some((s) => s.id === activeScreenId)) activeScreenId = project.screens[0].id;
   await loadAllRefs();
   refreshAll();
   markDirty();
@@ -107,20 +129,21 @@ function updateUndoButtons() {
 // ---------------- project model ----------------
 function newSliceDefaults(s) {
   return Object.assign(
-    { enabled: true, inOrient: 0, outOrient: 0, flip: 0, mask: null },
+    { enabled: true, inOrient: 0, outOrient: 0, flip: 0, mask: null, screenId: null },
     s
   );
 }
 
 function newProject() {
+  const scrId = 'scr' + Math.random().toString(36).slice(2, 7);
   return {
     name: 'Untitled',
     input: { width: 3840, height: 2160 },
-    output: { width: 3840, height: 2160 },
+    screens: [{ id: scrId, name: 'Output #1', width: 3840, height: 2160 }],
     refs: { input: null, output: null },
     slices: [
       newSliceDefaults({
-        id: uid(), name: 'Slice 1',
+        id: uid(), name: 'Slice 1', screenId: scrId,
         in: { x: 960, y: 540, w: 1920, h: 1080 },
         out: { x: 960, y: 540, w: 1920, h: 1080 },
       }),
@@ -152,27 +175,42 @@ function checkerDataUrl(w, h, cell) {
 }
 
 function demoProject() {
+  const scrId = 'scrdemo';
   return {
     name: "50x2m (100m2) P4.81 demo",
     input: { width: 10400, height: 416 },
-    output: { width: 3840, height: 2160 },
+    screens: [{ id: scrId, name: 'Output #1', width: 3840, height: 2160 }],
     refs: {
       input: { dataUrl: checkerDataUrl(2600, 104, 26), name: 'demo test card', opacity: 0.9 },
       output: null,
     },
     slices: [
-      newSliceDefaults({ id: uid(), name: '50x2m part 1/3', in: { x: 0, y: 0, w: 3744, h: 416 }, out: { x: 0, y: 0, w: 3744, h: 416 } }),
-      newSliceDefaults({ id: uid(), name: '50x2m part 2/3', in: { x: 3744, y: 0, w: 3744, h: 416 }, out: { x: 0, y: 416, w: 3744, h: 416 } }),
-      newSliceDefaults({ id: uid(), name: '50x2m part 3/3', in: { x: 7488, y: 0, w: 2912, h: 416 }, out: { x: 0, y: 832, w: 2912, h: 416 } }),
+      newSliceDefaults({ id: uid(), name: '50x2m part 1/3', screenId: scrId, in: { x: 0, y: 0, w: 3744, h: 416 }, out: { x: 0, y: 0, w: 3744, h: 416 } }),
+      newSliceDefaults({ id: uid(), name: '50x2m part 2/3', screenId: scrId, in: { x: 3744, y: 0, w: 3744, h: 416 }, out: { x: 0, y: 416, w: 3744, h: 416 } }),
+      newSliceDefaults({ id: uid(), name: '50x2m part 3/3', screenId: scrId, in: { x: 7488, y: 0, w: 2912, h: 416 }, out: { x: 0, y: 832, w: 2912, h: 416 } }),
     ],
   };
 }
 
 function migrateProject(p) {
-  if (!p || !p.input || !p.output || !Array.isArray(p.slices)) throw new Error('Invalid project file');
+  if (!p || !p.input || !Array.isArray(p.slices)) throw new Error('Invalid project file');
+  // v1 -> v2: single output -> screens[]
+  if (!p.screens || !p.screens.length) {
+    const out = p.output || { width: 1920, height: 1080 };
+    p.screens = [{ id: 'scr' + Math.random().toString(36).slice(2, 7), name: 'Output #1', width: out.width, height: out.height }];
+  }
+  delete p.output;
   p.refs = p.refs || { input: null, output: null };
   p.slices = p.slices.map((s) => newSliceDefaults(s));
-  p.slices.forEach((s) => { if (!s.id) s.id = uid(); });
+  p.slices.forEach((s) => {
+    if (!s.id) s.id = uid();
+    if (!s.screenId || !p.screens.some((sc) => sc.id === s.screenId)) s.screenId = p.screens[0].id;
+    // v1 rect mask -> polygon points
+    if (s.mask && !s.mask.points && s.mask.w > 0 && s.mask.h > 0) {
+      s.mask = { enabled: s.mask.enabled !== false, points: Geometry.rectToPoints(s.mask) };
+    }
+    if (s.mask && (!s.mask.points || s.mask.points.length < 3)) s.mask = null;
+  });
   return p;
 }
 
@@ -273,16 +311,31 @@ function drawCheckerBg(g, cx, cy, cwid, chei) {
   }
 }
 
-// Draw the content of a slice (from the input reference image) into its output place rect
+// Draw content of a slice (from a source image covering the input canvas) into its place rect.
+// t: view transform, kx/ky: image px per input-canvas px
 function drawSliceContent(g, img, eff, t, kx, ky) {
   const { crop, place, rot, flip } = eff;
+  const s = eff.slice;
+  g.save();
+  if (eff.polyMask && maskUsable(s)) {
+    const poly = Geometry.maskPolyInPlace(s, eff);
+    if (poly) {
+      g.beginPath();
+      poly.forEach((p, i) => {
+        const x = (place.x + p.x) * t.scale + t.ox;
+        const y = (place.y + p.y) * t.scale + t.oy;
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      });
+      g.closePath();
+      g.clip();
+    }
+  }
   const sx = crop.x * kx, sy = crop.y * ky, sw = crop.w * kx, sh = crop.h * ky;
   const pcx = (place.x + place.w / 2) * t.scale + t.ox;
   const pcy = (place.y + place.h / 2) * t.scale + t.oy;
   const swap = rot === 90 || rot === 270;
   const dw = (swap ? place.h : place.w) * t.scale;
   const dh = (swap ? place.w : place.h) * t.scale;
-  g.save();
   g.translate(pcx, pcy);
   g.scale(flip & 1 ? -1 : 1, flip & 2 ? -1 : 1);
   g.rotate((rot * Math.PI) / 180);
@@ -290,6 +343,10 @@ function drawSliceContent(g, img, eff, t, kx, ky) {
     g.drawImage(img, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
   } catch (e) { /* out of range */ }
   g.restore();
+}
+
+function maskScreenPoints(s) {
+  return s.mask.points.map((p) => ({ x: toScreenX(p.x), y: toScreenY(p.y) }));
 }
 
 function draw() {
@@ -322,7 +379,7 @@ function draw() {
     const img = refImgs.input;
     const kx = img.naturalWidth / project.input.width;
     const ky = img.naturalHeight / project.input.height;
-    for (const eff of Geometry.effectiveSlices(project)) {
+    for (const eff of Geometry.effectiveSlices(project, activeScreen().id)) {
       drawSliceContent(ctx, img, eff, t, kx, ky);
     }
   }
@@ -333,7 +390,7 @@ function draw() {
   ctx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
   // slices
-  for (const s of project.slices) {
+  for (const s of visibleSlices(view)) {
     const r = sliceRect(s, view);
     const x = toScreenX(r.x), y = toScreenY(r.y);
     const w = r.w * t.scale, h = r.h * t.scale;
@@ -350,27 +407,38 @@ function draw() {
     ctx.lineWidth = isSel ? 2 : 1;
     ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
 
-    // input mask visual (input view only)
-    if (view === 'input' && s.mask && s.mask.enabled) {
-      const m = Geometry.intersect(r, s.mask);
+    // input mask polygon (input view only)
+    if (view === 'input' && maskUsable(s)) {
+      const pts = maskScreenPoints(s);
       ctx.save();
+      // darken the part of the slice outside the mask polygon
       ctx.beginPath();
       ctx.rect(x, y, w, h);
-      if (m) {
-        // darken the masked-out part of the slice
-        const mx = toScreenX(m.x), my = toScreenY(m.y);
-        const mw = m.w * t.scale, mh = m.h * t.scale;
-        ctx.rect(mx + mw, my, -mw, mh); // reverse winding = hole
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fill('evenodd');
-        ctx.strokeStyle = isSel ? '#ffd28a' : 'rgba(255,210,138,0.6)';
-        ctx.setLineDash([5, 4]);
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(mx + 0.5, my + 0.5, mw - 1, mh - 1);
-        ctx.setLineDash([]);
-      } else {
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fill();
+      pts.slice().reverse().forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fill('evenodd');
+      // polygon outline
+      ctx.beginPath();
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.strokeStyle = isSel ? '#ffd28a' : 'rgba(255,210,138,0.6)';
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // key points in mask-edit mode
+      if (isSel && maskEdit) {
+        pts.forEach((p) => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffd28a';
+          ctx.fill();
+          ctx.strokeStyle = '#241503';
+          ctx.stroke();
+        });
       }
       ctx.restore();
     }
@@ -381,7 +449,11 @@ function draw() {
       const extras = [];
       if (Geometry.netRotation(s)) extras.push(Geometry.netRotation(s) + '°');
       if (s.flip) extras.push('flip');
-      if (s.mask && s.mask.enabled && view === 'input') extras.push('mask');
+      if (maskUsable(s) && view === 'input') extras.push('mask');
+      if (view === 'input' && project.screens.length > 1) {
+        const idx = project.screens.findIndex((sc) => sc.id === sliceScreenId(s));
+        extras.push('S' + (idx + 1));
+      }
       const sub = `${r.w}×${r.h}` + (extras.length ? ' · ' + extras.join(' ') : '');
       ctx.font = 'bold 11px -apple-system, sans-serif';
       const tw = Math.max(ctx.measureText(label).width, ctx.measureText(sub).width - 14);
@@ -399,20 +471,18 @@ function draw() {
     }
   }
 
-  // handles on selection (slice, or its mask in mask-edit mode)
+  // handles on selection (slice rect; hidden in mask-edit mode)
   const sel = selected();
-  if (sel) {
-    const r = editTargetRect(sel);
-    if (r) {
-      const x = toScreenX(r.x), y = toScreenY(r.y);
-      const w = r.w * t.scale, h = r.h * t.scale;
-      for (const hd of HANDLES) {
-        const hx = x + w * hd.fx, hy = y + h * hd.fy;
-        ctx.fillStyle = maskEditActive() ? '#ffd28a' : '#ffffff';
-        ctx.strokeStyle = '#241503';
-        ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
-        ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
-      }
+  if (sel && !maskEditActive()) {
+    const r = sliceRect(sel, view);
+    const x = toScreenX(r.x), y = toScreenY(r.y);
+    const w = r.w * t.scale, h = r.h * t.scale;
+    for (const hd of HANDLES) {
+      const hx = x + w * hd.fx, hy = y + h * hd.fy;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#241503';
+      ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
+      ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
     }
   }
 
@@ -425,22 +495,15 @@ function draw() {
 
 function maskEditActive() {
   const s = selected();
-  return maskEdit && view === 'input' && s && s.mask && s.mask.enabled;
-}
-
-// The rect currently editable on canvas: mask (in mask-edit mode) or slice rect
-function editTargetRect(s) {
-  if (maskEditActive()) return s.mask;
-  return sliceRect(s, view);
+  return maskEdit && view === 'input' && s && maskUsable(s);
 }
 
 // ---------------- hit testing ----------------
 function handleAt(px, py) {
   const sel = selected();
-  if (!sel) return null;
+  if (!sel || maskEditActive()) return null;
   const t = vt[view];
-  const r = editTargetRect(sel);
-  if (!r) return null;
+  const r = sliceRect(sel, view);
   const x = toScreenX(r.x), y = toScreenY(r.y);
   const w = r.w * t.scale, h = r.h * t.scale;
   for (const hd of HANDLES) {
@@ -450,10 +513,34 @@ function handleAt(px, py) {
   return null;
 }
 
+function maskPointAt(px, py) {
+  const sel = selected();
+  if (!maskEditActive()) return -1;
+  const pts = maskScreenPoints(sel);
+  for (let i = 0; i < pts.length; i++) {
+    if (Math.hypot(px - pts[i].x, py - pts[i].y) <= 8) return i;
+  }
+  return -1;
+}
+
+function pointInPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    if (
+      pts[i].y > y !== pts[j].y > y &&
+      x < ((pts[j].x - pts[i].x) * (y - pts[i].y)) / (pts[j].y - pts[i].y) + pts[i].x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function sliceAt(px, py) {
   const wpt = toWorld(px, py);
-  for (let i = project.slices.length - 1; i >= 0; i--) {
-    const s = project.slices[i];
+  const list = visibleSlices(view);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const s = list[i];
     const r = sliceRect(s, view);
     if (wpt.x >= r.x && wpt.x <= r.x + r.w && wpt.y >= r.y && wpt.y <= r.y + r.h) return s;
   }
@@ -467,7 +554,7 @@ function snapDelta(r, v) {
   const { w: W, h: H } = worldSize(v);
   const xEdges = [0, W];
   const yEdges = [0, H];
-  for (const o of project.slices) {
+  for (const o of visibleSlices(v)) {
     if (o.id === selId) continue;
     const or = sliceRect(o, v);
     xEdges.push(or.x, or.x + or.w);
@@ -499,6 +586,24 @@ function applyResize(r0, k, dx, dy) {
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
 }
 
+// insert a mask point on the closest polygon edge to (wx, wy)
+function insertMaskPoint(s, wx, wy) {
+  const pts = s.mask.points;
+  let best = { d: Infinity, idx: 0, x: wx, y: wy };
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const abx = b.x - a.x, aby = b.y - a.y;
+    const len2 = abx * abx + aby * aby || 1;
+    let u = ((wx - a.x) * abx + (wy - a.y) * aby) / len2;
+    u = Math.max(0, Math.min(1, u));
+    const px = a.x + u * abx, py = a.y + u * aby;
+    const d = Math.hypot(wx - px, wy - py);
+    if (d < best.d) best = { d, idx: i + 1, x: px, y: py };
+  }
+  pts.splice(best.idx, 0, { x: Math.round(best.x), y: Math.round(best.y) });
+}
+
 function onMouseDown(e) {
   if (!project || page !== 'editor') return;
   const px = e.offsetX, py = e.offsetY;
@@ -508,26 +613,44 @@ function onMouseDown(e) {
     drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, ox: t.ox, oy: t.oy };
     return;
   }
+
+  // mask-edit: right-click on a point removes it
+  if (e.button === 2 && maskEditActive()) {
+    const idx = maskPointAt(px, py);
+    const sel = selected();
+    if (idx >= 0 && sel.mask.points.length > 3) {
+      pushHistory();
+      sel.mask.points.splice(idx, 1);
+      refreshProps();
+      draw();
+      markDirty();
+    }
+    return;
+  }
   if (e.button !== 0) return;
+
+  if (maskEditActive()) {
+    const sel = selected();
+    const idx = maskPointAt(px, py);
+    if (idx >= 0) {
+      pushHistory();
+      drag = { mode: 'maskpoint', idx, start: toWorld(px, py), orig: { ...sel.mask.points[idx] } };
+      return;
+    }
+    const wpt = toWorld(px, py);
+    if (pointInPoly(wpt.x, wpt.y, sel.mask.points)) {
+      pushHistory();
+      drag = { mode: 'maskmove', start: wpt, orig: sel.mask.points.map((p) => ({ ...p })) };
+      return;
+    }
+  }
 
   const hk = handleAt(px, py);
   if (hk) {
     const sel = selected();
     pushHistory();
-    drag = { mode: 'resize', k: hk, start: toWorld(px, py), orig: { ...editTargetRect(sel) } };
+    drag = { mode: 'resize', k: hk, start: toWorld(px, py), orig: { ...sliceRect(sel, view) } };
     return;
-  }
-
-  // mask-edit mode: drag inside mask moves the mask
-  if (maskEditActive()) {
-    const sel = selected();
-    const wpt = toWorld(px, py);
-    const m = sel.mask;
-    if (wpt.x >= m.x && wpt.x <= m.x + m.w && wpt.y >= m.y && wpt.y <= m.y + m.h) {
-      pushHistory();
-      drag = { mode: 'move', start: wpt, orig: { ...m } };
-      return;
-    }
   }
 
   const s = sliceAt(px, py);
@@ -551,13 +674,28 @@ function onMouseDown(e) {
   drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, ox: t.ox, oy: t.oy };
 }
 
+function onDblClick(e) {
+  if (!maskEditActive()) return;
+  const sel = selected();
+  const wpt = toWorld(e.offsetX, e.offsetY);
+  pushHistory();
+  insertMaskPoint(sel, wpt.x, wpt.y);
+  refreshProps();
+  draw();
+  markDirty();
+}
+
 function onMouseMove(e) {
   if (!project || page !== 'editor') return;
   const px = e.offsetX, py = e.offsetY;
   const wpt = toWorld(px, py);
-  $('status-pos').textContent = `${view === 'input' ? 'Input' : 'Output'}: ${Math.round(wpt.x)}, ${Math.round(wpt.y)}  ·  zoom ${Math.round(vt[view].scale * 100)}%${maskEditActive() ? '  ·  MASK EDIT' : ''}`;
+  $('status-pos').textContent = `${view === 'input' ? 'Input' : 'Output · ' + activeScreen().name}: ${Math.round(wpt.x)}, ${Math.round(wpt.y)}  ·  zoom ${Math.round(vt[view].scale * 100)}%${maskEditActive() ? '  ·  MASK EDIT' : ''}`;
 
   if (!drag) {
+    if (maskEditActive() && maskPointAt(px, py) >= 0) {
+      canvas.style.cursor = 'crosshair';
+      return;
+    }
     const hk = handleAt(px, py);
     canvas.style.cursor = hk
       ? HANDLE_CURSORS[hk]
@@ -579,21 +717,30 @@ function onMouseMove(e) {
 
   const sel = selected();
   if (!sel) return;
-  const target = editTargetRect(sel);
   const dx = wpt.x - drag.start.x;
   const dy = wpt.y - drag.start.y;
 
-  if (drag.mode === 'move') {
-    let nr = { x: drag.orig.x + dx, y: drag.orig.y + dy, w: drag.orig.w, h: drag.orig.h };
-    if (!maskEditActive()) {
-      const sn = snapDelta(nr, view);
-      nr.x += sn.dx;
-      nr.y += sn.dy;
+  if (drag.mode === 'maskpoint') {
+    const p = sel.mask.points[drag.idx];
+    if (p) {
+      p.x = Math.round(drag.orig.x + dx);
+      p.y = Math.round(drag.orig.y + dy);
     }
-    target.x = Math.round(nr.x);
-    target.y = Math.round(nr.y);
+  } else if (drag.mode === 'maskmove') {
+    sel.mask.points.forEach((p, i) => {
+      p.x = Math.round(drag.orig[i].x + dx);
+      p.y = Math.round(drag.orig[i].y + dy);
+    });
+  } else if (drag.mode === 'move') {
+    const r = sliceRect(sel, view);
+    let nr = { x: drag.orig.x + dx, y: drag.orig.y + dy, w: drag.orig.w, h: drag.orig.h };
+    const sn = snapDelta(nr, view);
+    nr.x += sn.dx;
+    nr.y += sn.dy;
+    r.x = Math.round(nr.x);
+    r.y = Math.round(nr.y);
   } else if (drag.mode === 'resize') {
-    Object.assign(target, applyResize(drag.orig, drag.k, dx, dy));
+    Object.assign(sliceRect(sel, view), applyResize(drag.orig, drag.k, dx, dy));
   }
   refreshProps();
   refreshSliceList();
@@ -633,6 +780,7 @@ function refreshSliceList() {
   const list = $('slice-list');
   const scroll = list.scrollTop;
   list.innerHTML = '';
+  const multi = project.screens.length > 1;
   for (const s of project.slices) {
     const item = document.createElement('div');
     item.className = 'slice-item' + (s.id === selId ? ' selected' : '') + (s.enabled === false ? ' off' : '');
@@ -651,13 +799,25 @@ function refreshSliceList() {
     const nm = document.createElement('span');
     nm.className = 'nm';
     nm.textContent = s.name;
+    item.append(cb, nm);
+    if (multi) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = 'S' + (project.screens.findIndex((sc) => sc.id === sliceScreenId(s)) + 1);
+      item.append(badge);
+    }
     const sz = document.createElement('span');
     sz.className = 'sz';
     const r = sliceRect(s, view);
     sz.textContent = `${r.w}×${r.h}`;
-    item.append(cb, nm, sz);
+    item.append(sz);
     item.addEventListener('click', () => {
       selId = s.id;
+      if (view === 'output' && sliceScreenId(s) !== activeScreen().id) {
+        activeScreenId = sliceScreenId(s);
+        refreshScreenSelectors();
+        fitView('output');
+      }
       refreshSliceList();
       refreshProps();
       draw();
@@ -668,13 +828,37 @@ function refreshSliceList() {
 }
 
 const FLIP_LABELS = ['None', 'H', 'V', 'H+V'];
-// pac-man style flip indicator: wedge opens differently per state
 const FLIP_PATHS = [
-  'M10 2 A8 8 0 1 1 9.99 2 Z', // none: full circle
-  'M10 10 L16 4 A8 8 0 1 1 16 16 Z M10 10 L4 4 A8 8 0 0 0 4 16 Z', // H: two wedges facing
-  'M10 10 L4 4 A8 8 0 0 1 16 4 Z M10 10 L4 16 A8 8 0 0 0 16 16 Z', // V
-  'M10 2 A8 8 0 1 1 2 10 L10 10 Z', // both: pac-man
+  'M10 2 A8 8 0 1 1 9.99 2 Z',
+  'M10 10 L16 4 A8 8 0 1 1 16 16 Z M10 10 L4 4 A8 8 0 0 0 4 16 Z',
+  'M10 10 L4 4 A8 8 0 0 1 16 4 Z M10 10 L4 16 A8 8 0 0 0 16 16 Z',
+  'M10 2 A8 8 0 1 1 2 10 L10 10 Z',
 ];
+
+function refreshScreenSelectors() {
+  const opts = project.screens
+    .map((sc, i) => `<option value="${sc.id}">${i + 1}. ${sc.name} (${sc.width}×${sc.height})</option>`)
+    .join('');
+  const psel = $('p-screen-select');
+  psel.innerHTML = opts;
+  psel.value = activeScreen().id;
+  const tsel = $('screen-select');
+  tsel.innerHTML = opts;
+  tsel.value = activeScreen().id;
+  tsel.classList.toggle('hidden', !(project.screens.length > 1 && view === 'output' && page === 'editor'));
+  const slsel = $('sl-screen');
+  slsel.innerHTML = opts;
+  const rpsel = $('rp-screen-select');
+  rpsel.innerHTML = opts;
+  if (!project.screens.some((sc) => sc.id === rp.screenId)) rp.screenId = project.screens[0].id;
+  rpsel.value = rp.screenId;
+  rpsel.classList.toggle('hidden', !(project.screens.length > 1 && rp.viewMode === 'output'));
+  const sc = activeScreen();
+  $('scr-name').value = sc.name;
+  $('out-w').value = sc.width;
+  $('out-h').value = sc.height;
+  $('p-screen-del').disabled = project.screens.length <= 1;
+}
 
 function refreshProps() {
   const s = selected();
@@ -690,6 +874,7 @@ function refreshProps() {
   }
   set('sl-name', s.name);
   $('sl-enabled').checked = s.enabled !== false;
+  $('sl-screen').value = sliceScreenId(s);
   set('sl-in-x', s.in.x); set('sl-in-y', s.in.y); set('sl-in-w', s.in.w); set('sl-in-h', s.in.h);
   set('sl-out-x', s.out.x); set('sl-out-y', s.out.y); set('sl-out-w', s.out.w); set('sl-out-h', s.out.h);
   $('sl-in-rot').value = String(s.inOrient || 0);
@@ -698,21 +883,20 @@ function refreshProps() {
   $('flip-pac').setAttribute('d', FLIP_PATHS[s.flip || 0]);
   $('sl-flip').classList.toggle('active', !!s.flip);
 
-  const m = s.mask;
-  $('mask-enabled').checked = !!(m && m.enabled);
+  const bb = s.mask ? Geometry.maskBBox(s.mask) : null;
+  $('mask-enabled').checked = !!(s.mask && s.mask.enabled);
   $('mask-edit').checked = maskEdit;
-  set('mask-x', m ? m.x : '');
-  set('mask-y', m ? m.y : '');
-  set('mask-w', m ? m.w : '');
-  set('mask-h', m ? m.h : '');
+  set('mask-x', bb ? bb.x : '');
+  set('mask-y', bb ? bb.y : '');
+  set('mask-w', bb ? bb.w : '');
+  set('mask-h', bb ? bb.h : '');
 }
 
 function refreshProjectFields() {
   $('p-name').value = project.name;
   $('in-w').value = project.input.width;
   $('in-h').value = project.input.height;
-  $('out-w').value = project.output.width;
-  $('out-h').value = project.output.height;
+  refreshScreenSelectors();
 }
 
 function refreshRefPanel() {
@@ -729,15 +913,9 @@ function refreshEngineInfo() {
     return;
   }
   const main = caps.entries[0];
-  const dxvTxt = caps.hasDxv
-    ? '<span style="color:#f7941e">DXV3 ✓</span>'
-    : 'DXV3 ✗';
-  el.innerHTML = `ffmpeg ${main.version}<br>ProRes HQ ✓ · ${dxvTxt}`;
-  const dxvRow = $('dxv-radio-row');
-  if (dxvRow) {
-    dxvRow.classList.toggle('disabled', !caps.hasDxv);
-    dxvRow.querySelector('input').disabled = !caps.hasDxv;
-  }
+  const tag = (okFlag, name) =>
+    okFlag ? `<span style="color:#f7941e">${name} ✓</span>` : `${name} ✗`;
+  el.innerHTML = `ffmpeg ${main.version}<br>ProRes ✓ · ${tag(caps.hasDxv, 'DXV3')} · ${tag(caps.hasHap, 'HAP')} · ${tag(caps.hasX265, 'HEVC')}`;
 }
 
 function refreshAll() {
@@ -756,6 +934,7 @@ function switchView(v) {
   $('tab-output').classList.toggle('active', v === 'output');
   refreshRefPanel();
   refreshSliceList();
+  refreshScreenSelectors();
   updateZoomLabel();
   draw();
 }
@@ -768,23 +947,27 @@ function switchPage(p) {
   $('btn-back-editor').classList.toggle('hidden', p !== 'render');
   ['tb-editor-left', 'view-tabs'].forEach((id) => $(id).classList.toggle('hidden', p === 'render'));
   document.querySelectorAll('#toolbar .zoom, #toolbar .tb-sep').forEach((el) => el.classList.toggle('hidden', p === 'render'));
+  refreshScreenSelectors();
   if (p === 'editor') {
     resizeCanvas();
   } else {
     resizeRenderCanvas();
     refreshFileList();
+    refreshCodecUI();
     drawRenderPreview();
   }
 }
 
 function addSlice() {
   pushHistory();
-  const inC = project.input, outC = project.output;
+  const inC = project.input;
+  const sc = activeScreen();
   const s = newSliceDefaults({
     id: uid(),
     name: 'Slice ' + (project.slices.length + 1),
+    screenId: sc.id,
     in: { x: Math.round(inC.width / 4), y: Math.round(inC.height / 4), w: Math.round(inC.width / 2), h: Math.round(inC.height / 2) },
-    out: { x: Math.round(outC.width / 4), y: Math.round(outC.height / 4), w: Math.round(outC.width / 2), h: Math.round(outC.height / 2) },
+    out: { x: Math.round(sc.width / 4), y: Math.round(sc.height / 4), w: Math.round(sc.width / 2), h: Math.round(sc.height / 2) },
   });
   project.slices.push(s);
   selId = s.id;
@@ -803,6 +986,7 @@ function duplicateSlice() {
   c.name = s.name + ' copy';
   c.in.x += 20; c.in.y += 20;
   c.out.x += 20; c.out.y += 20;
+  if (c.mask && c.mask.points) c.mask.points.forEach((p) => { p.x += 20; p.y += 20; });
   project.slices.splice(project.slices.indexOf(s) + 1, 0, c);
   selId = c.id;
   refreshSliceList();
@@ -834,6 +1018,7 @@ function autoSplitSlice(s, partW, rowH, startX, startY, gapY) {
     parts.push(newSliceDefaults({
       id: uid(),
       name: `${s.name} ${i + 1}/${n}`,
+      screenId: sliceScreenId(s),
       in: {
         x: Math.round(s.in.x + fx0 * s.in.w),
         y: s.in.y,
@@ -872,7 +1057,8 @@ function openSplitModal() {
     alert('Select a slice first.');
     return;
   }
-  const defW = Math.min(project.output.width, s.out.w);
+  const sc = activeScreen();
+  const defW = Math.min(sc.width, s.out.w);
   openModal(`
     <div class="modal" style="width:440px">
       <div class="modal-head">Split "${s.name}" into rows<button class="close-x" id="m-close">✕</button></div>
@@ -902,7 +1088,7 @@ function openSplitModal() {
     const totalH = n * rowH + (n - 1) * gap;
     $('m-summary').textContent =
       `→ ${n} rows: ${n > 1 ? `${n - 1} × ${partW}px + 1 × ${last}px` : `1 × ${last}px`}, ` +
-      `total ${totalH}px high on output (canvas ${project.output.height}px)`;
+      `total ${totalH}px high on output (canvas ${sc.height}px)`;
   };
   ['m-partw', 'm-rowh', 'm-gapy'].forEach((id) => ($(id).oninput = updateSummary));
   updateSummary();
@@ -926,12 +1112,17 @@ function openSplitModal() {
   };
 }
 
-// ---------------- render page ----------------
+// ---------------- export page ----------------
 const rp = {
-  files: [], // {path, isImage, probe, transform, frameImg, frameTime}
+  files: [], // {path, isImage, probe, transform, frameImg, frameTime, selected, inSec, outSec}
   activeIndex: -1,
   destDir: null,
   running: false,
+  viewMode: 'input',
+  screenId: null,
+  watchDir: null,
+  watching: false,
+  watchQueue: [],
   vt: { scale: 0.1, ox: 40, oy: 40 },
 };
 let rpCanvas, rpCtx;
@@ -944,7 +1135,7 @@ function activeFile() {
 function resizeRenderCanvas() {
   if (!rpCanvas) return;
   const rect = rpCanvas.parentElement.getBoundingClientRect();
-  const tlH = $('rp-timeline') ? $('rp-timeline').offsetHeight : 36;
+  const tlH = ($('rp-timeline') ? $('rp-timeline').offsetHeight : 36) + ($('rp-viewbar') ? $('rp-viewbar').offsetHeight : 34);
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.max(50, rect.width);
   const ch = Math.max(50, rect.height - tlH);
@@ -957,9 +1148,15 @@ function resizeRenderCanvas() {
   drawRenderPreview();
 }
 
+function rpWorld() {
+  if (rp.viewMode === 'input') return { w: project.input.width, h: project.input.height };
+  const sc = project.screens.find((s) => s.id === rp.screenId) || project.screens[0];
+  return { w: sc.width, h: sc.height };
+}
+
 function fitRenderView() {
   const { w: cw, h: ch } = cssSize(rpCanvas);
-  const W = project.input.width, H = project.input.height;
+  const { w: W, h: H } = rpWorld();
   const margin = 40;
   const scale = Math.min((cw - margin * 2) / W, (ch - margin * 2) / H);
   rp.vt.scale = Math.max(0.001, Math.min(8, scale));
@@ -967,18 +1164,60 @@ function fitRenderView() {
   rp.vt.oy = (ch - H * rp.vt.scale) / 2;
 }
 
+function clipFilterString(tr, scalePx) {
+  const b = tr.brightness || 0;
+  const c = tr.contrast || 0;
+  const s = tr.saturation != null ? tr.saturation : 1;
+  const filters = [];
+  if (b) filters.push(`brightness(${(1 + b).toFixed(3)})`);
+  if (c) filters.push(`contrast(${(1 + c).toFixed(3)})`);
+  if (s !== 1) filters.push(`saturate(${s.toFixed(3)})`);
+  if (tr.hue) filters.push(`hue-rotate(${tr.hue}deg)`);
+  if (tr.blur > 0) filters.push(`blur(${(tr.blur * scalePx).toFixed(2)}px)`);
+  return filters.join(' ') || 'none';
+}
+
+// Draw the transformed clip into a context whose world = input canvas (scale factor k px/world-px)
+function drawClipInto(g, f, IW, IH, k) {
+  const tr = f.transform;
+  const lay = Geometry.clipLayout(f.probe.width, f.probe.height, tr, IW, IH);
+  g.filter = clipFilterString(tr, k);
+  g.save();
+  g.translate(lay.cx * k, lay.cy * k);
+  g.rotate(lay.angleRad);
+  g.drawImage(f.frameImg, (-lay.bw / 2) * k, (-lay.bh / 2) * k, lay.bw * k, lay.bh * k);
+  g.restore();
+  g.filter = 'none';
+}
+
+// Offscreen composite of the input canvas with the active clip (for the output preview)
+function buildInputComposite(f) {
+  const IW = project.input.width, IH = project.input.height;
+  const maxW = 2048;
+  const k = Math.min(1, maxW / IW);
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(IW * k));
+  c.height = Math.max(2, Math.round(IH * k));
+  const g = c.getContext('2d');
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, c.width, c.height);
+  if (f && f.frameImg && f.probe && f.probe.width) drawClipInto(g, f, IW, IH, k);
+  return { canvas: c, k };
+}
+
 function drawRenderPreview() {
   if (page !== 'render' || !rpCtx || !project) return;
   const t = rp.vt;
   const { w: cw, h: ch } = cssSize(rpCanvas);
-  const W = project.input.width, H = project.input.height;
+  const { w: W, h: H } = rpWorld();
 
   rpCtx.clearRect(0, 0, cw, ch);
   rpCtx.fillStyle = '#202426';
   rpCtx.fillRect(0, 0, cw, ch);
 
-  const cx = W * 0 * t.scale + t.ox, cy = t.oy;
+  const cx = t.ox, cy = t.oy;
   const cwid = W * t.scale, chei = H * t.scale;
+  const f = activeFile();
 
   rpCtx.save();
   rpCtx.beginPath();
@@ -986,64 +1225,75 @@ function drawRenderPreview() {
   rpCtx.clip();
   drawCheckerBg(rpCtx, cx, cy, cwid, chei);
 
-  const f = activeFile();
-  if (f && f.frameImg && f.probe && f.probe.width) {
-    const tr = f.transform;
-    const lay = Geometry.clipLayout(f.probe.width, f.probe.height, tr, W, H);
-    const b = tr.brightness || 0;
-    const c = tr.contrast || 0;
-    const s = tr.saturation != null ? tr.saturation : 1;
-    const filters = [];
-    if (b) filters.push(`brightness(${(1 + b).toFixed(3)})`);
-    if (c) filters.push(`contrast(${(1 + c).toFixed(3)})`);
-    if (s !== 1) filters.push(`saturate(${s.toFixed(3)})`);
-    if (tr.hue) filters.push(`hue-rotate(${tr.hue}deg)`);
-    if (tr.blur > 0) filters.push(`blur(${(tr.blur * t.scale).toFixed(2)}px)`);
-    rpCtx.filter = filters.join(' ') || 'none';
-    rpCtx.save();
-    rpCtx.translate(lay.cx * t.scale + t.ox, lay.cy * t.scale + t.oy);
-    rpCtx.rotate(lay.angleRad);
-    rpCtx.drawImage(
-      f.frameImg,
-      (-lay.bw / 2) * t.scale,
-      (-lay.bh / 2) * t.scale,
-      lay.bw * t.scale,
-      lay.bh * t.scale
-    );
-    rpCtx.restore();
-    rpCtx.filter = 'none';
+  if (rp.viewMode === 'input') {
+    if (f && f.frameImg && f.probe && f.probe.width) {
+      rpCtx.save();
+      rpCtx.translate(t.ox, t.oy);
+      const lay = Geometry.clipLayout(f.probe.width, f.probe.height, f.transform, W, H);
+      rpCtx.filter = clipFilterString(f.transform, t.scale);
+      rpCtx.translate(lay.cx * t.scale, lay.cy * t.scale);
+      rpCtx.rotate(lay.angleRad);
+      rpCtx.drawImage(f.frameImg, (-lay.bw / 2) * t.scale, (-lay.bh / 2) * t.scale, lay.bw * t.scale, lay.bh * t.scale);
+      rpCtx.filter = 'none';
+      rpCtx.restore();
+    }
+  } else {
+    // output view: composite input canvas, then map through slices
+    const scr = project.screens.find((s) => s.id === rp.screenId) || project.screens[0];
+    const comp = buildInputComposite(f);
+    for (const eff of Geometry.effectiveSlices(project, scr.id)) {
+      drawSliceContentRP(rpCtx, comp.canvas, eff, t, comp.k, comp.k);
+    }
   }
   rpCtx.restore();
 
   rpCtx.strokeStyle = '#42484c';
   rpCtx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
-  // slice outlines (thin), with masks
-  for (const sl of project.slices) {
-    if (sl.enabled === false) continue;
-    const r = sl.in;
-    const x = r.x * t.scale + t.ox, y = r.y * t.scale + t.oy;
-    rpCtx.strokeStyle = 'rgba(247,148,30,0.65)';
-    rpCtx.lineWidth = 1;
-    rpCtx.strokeRect(x + 0.5, y + 0.5, r.w * t.scale - 1, r.h * t.scale - 1);
-    if (sl.mask && sl.mask.enabled) {
-      const m = Geometry.intersect(r, sl.mask);
-      if (m) {
+  // slice outlines
+  if (rp.viewMode === 'input') {
+    for (const sl of project.slices) {
+      if (sl.enabled === false) continue;
+      const r = sl.in;
+      const x = r.x * t.scale + t.ox, y = r.y * t.scale + t.oy;
+      rpCtx.strokeStyle = 'rgba(247,148,30,0.65)';
+      rpCtx.lineWidth = 1;
+      rpCtx.strokeRect(x + 0.5, y + 0.5, r.w * t.scale - 1, r.h * t.scale - 1);
+      if (maskUsable(sl)) {
         rpCtx.setLineDash([4, 3]);
         rpCtx.strokeStyle = 'rgba(255,210,138,0.5)';
-        rpCtx.strokeRect(m.x * t.scale + t.ox + 0.5, m.y * t.scale + t.oy + 0.5, m.w * t.scale - 1, m.h * t.scale - 1);
+        rpCtx.beginPath();
+        sl.mask.points.forEach((p, i) => {
+          const px = p.x * t.scale + t.ox, py = p.y * t.scale + t.oy;
+          if (i === 0) rpCtx.moveTo(px, py); else rpCtx.lineTo(px, py);
+        });
+        rpCtx.closePath();
+        rpCtx.stroke();
         rpCtx.setLineDash([]);
       }
     }
+  } else {
+    const scr = project.screens.find((s) => s.id === rp.screenId) || project.screens[0];
+    for (const sl of project.slices) {
+      if (sl.enabled === false || sliceScreenId(sl) !== scr.id) continue;
+      const r = sl.out;
+      rpCtx.strokeStyle = 'rgba(247,148,30,0.4)';
+      rpCtx.lineWidth = 1;
+      rpCtx.strokeRect(r.x * t.scale + t.ox + 0.5, r.y * t.scale + t.oy + 0.5, r.w * t.scale - 1, r.h * t.scale - 1);
+    }
   }
 
-  // hint when empty
   if (!rp.files.length) {
     rpCtx.fillStyle = '#8b9195';
     rpCtx.font = '14px -apple-system, sans-serif';
     rpCtx.textAlign = 'center';
-    rpCtx.fillText('Add footage to preview it on the input map', cw / 2, ch / 2);
+    rpCtx.fillText('Add footage to preview it on the map', cw / 2, ch / 2);
   }
+}
+
+// same as drawSliceContent but with rp transform
+function drawSliceContentRP(g, img, eff, t, kx, ky) {
+  drawSliceContent(g, img, eff, { scale: t.scale, ox: t.ox, oy: t.oy }, kx, ky);
 }
 
 function refreshFileList() {
@@ -1057,15 +1307,39 @@ function refreshFileList() {
     const row = document.createElement('div');
     const edited = !Geometry.isIdentityTransform(f.transform);
     row.className = 'file-row' + (i === rp.activeIndex ? ' selected' : '') + (edited ? ' edited' : '');
-    row.innerHTML = `<span class="tag">${f.isImage ? 'IMG' : 'VID'}</span><span class="nm" title="${f.path}">${baseName(f.path)}</span><span class="sz">${f.probe && f.probe.width ? f.probe.width + '×' + f.probe.height : ''}</span>`;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = f.selected !== false;
+    cb.title = 'Include in export';
+    cb.addEventListener('click', (e) => e.stopPropagation());
+    cb.addEventListener('change', () => {
+      f.selected = cb.checked;
+      updateStartButton();
+    });
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = f.isImage ? 'IMG' : 'VID';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.title = f.path;
+    nm.textContent = baseName(f.path);
+    const sz = document.createElement('span');
+    sz.className = 'sz';
+    sz.textContent = f.probe && f.probe.width ? `${f.probe.width}×${f.probe.height}` : '';
+    row.append(cb, tag, nm, sz);
     row.onclick = () => selectFile(i);
     list.appendChild(row);
   });
-  $('r-start').disabled = !rp.files.length || rp.running;
+  updateStartButton();
   $('rp-clip-name').textContent = activeFile() ? baseName(activeFile().path) : 'no selection';
 }
 
-async function addFootage(paths) {
+function updateStartButton() {
+  $('r-start').disabled = !rp.files.some((f) => f.selected !== false) || rp.running;
+}
+
+async function addFootage(paths, opts) {
+  let firstNew = -1;
   for (const p of paths) {
     if (rp.files.some((f) => f.path === p)) continue;
     const f = {
@@ -1075,7 +1349,11 @@ async function addFootage(paths) {
       transform: Geometry.defaultTransform(),
       frameImg: null,
       frameTime: 0,
+      selected: true,
+      inSec: null,
+      outSec: null,
     };
+    if (firstNew < 0) firstNew = rp.files.length;
     rp.files.push(f);
     try {
       f.probe = await api.previewProbe(p);
@@ -1088,11 +1366,12 @@ async function addFootage(paths) {
     rp.destDir = pp.dir;
     $('r-dest').textContent = rp.destDir;
   }
-  if (rp.activeIndex < 0 && rp.files.length) {
-    selectFile(0);
+  if ((rp.activeIndex < 0 || (opts && opts.select)) && firstNew >= 0) {
+    selectFile(firstNew);
   } else {
     refreshFileList();
   }
+  refreshCodecUI();
 }
 
 function selectFile(i) {
@@ -1100,10 +1379,11 @@ function selectFile(i) {
   const f = activeFile();
   refreshFileList();
   refreshClipControls();
+  refreshTrimUI();
   if (f) {
     const dur = f.probe && f.probe.durationSec ? f.probe.durationSec : 0;
     $('rp-time').max = f.isImage ? 0 : Math.max(0, dur - 0.05).toFixed(2);
-    $('rp-time').value = Math.min(parseFloat($('rp-time').value) || 0, parseFloat($('rp-time').max));
+    $('rp-time').value = Math.min(f.frameTime || 0, parseFloat($('rp-time').max) || 0);
     $('rp-time').disabled = f.isImage;
     updateTimeLabel();
     fetchFrame(true);
@@ -1112,7 +1392,41 @@ function selectFile(i) {
 }
 
 function updateTimeLabel() {
-  $('rp-timelabel').textContent = `${(parseFloat($('rp-time').value) || 0).toFixed(2)} s`;
+  const f = activeFile();
+  let txt = `${(parseFloat($('rp-time').value) || 0).toFixed(2)} s`;
+  if (f && (f.inSec != null || f.outSec != null)) {
+    txt += `  [${f.inSec != null ? f.inSec.toFixed(2) : '0'} → ${f.outSec != null ? f.outSec.toFixed(2) : 'end'}]`;
+  }
+  $('rp-timelabel').textContent = txt;
+}
+
+function refreshTrimUI() {
+  const f = activeFile();
+  const dur = f && f.probe && f.probe.durationSec ? f.probe.durationSec : 0;
+  const wrap = document.querySelector('.tl-wrap');
+  const inM = $('tl-in'), outM = $('tl-out'), rangeBar = $('tl-range');
+  const isVid = f && !f.isImage && dur > 0;
+  ['rp-set-in', 'rp-set-out', 'rp-clear-trim'].forEach((id) => ($(id).disabled = !isVid));
+  if (!isVid) {
+    inM.classList.add('hidden');
+    outM.classList.add('hidden');
+    rangeBar.style.width = '0';
+    return;
+  }
+  const w = wrap.getBoundingClientRect().width;
+  const px = (sec) => Math.max(0, Math.min(1, sec / dur)) * w;
+  if (f.inSec != null) {
+    inM.classList.remove('hidden');
+    inM.style.left = px(f.inSec) + 'px';
+  } else inM.classList.add('hidden');
+  if (f.outSec != null) {
+    outM.classList.remove('hidden');
+    outM.style.left = px(f.outSec) + 'px';
+  } else outM.classList.add('hidden');
+  const a = f.inSec != null ? px(f.inSec) : 0;
+  const b = f.outSec != null ? px(f.outSec) : w;
+  rangeBar.style.left = a + 'px';
+  rangeBar.style.width = Math.max(0, b - a) + 'px';
 }
 
 function fetchFrame(immediate) {
@@ -1198,30 +1512,226 @@ function bindClipControls() {
   };
 }
 
-async function startRender() {
-  if (rp.running || !rp.files.length) return;
-  const codec = document.querySelector('input[name="r-codec"]:checked').value;
+// ---------------- codec UI ----------------
+function buildCodecSelect() {
+  const sel = $('r-codec');
+  const groups = {};
+  for (const c of Codecs.CODECS) {
+    (groups[c.group] = groups[c.group] || []).push(c);
+  }
+  sel.innerHTML = Object.entries(groups)
+    .map(
+      ([g, list]) =>
+        `<optgroup label="${g}">` +
+        list
+          .map((c) => {
+            const rt = runtimeUnsupported(c);
+            return `<option value="${c.id}" ${c.unsupported || rt ? 'disabled' : ''}>${c.label}${c.unsupported ? ' — n/a' : rt ? ' — n/a' : ''}</option>`;
+          })
+          .join('') +
+        '</optgroup>'
+    )
+    .join('');
+  sel.value = 'prores_hq';
+}
+
+function runtimeUnsupported(c) {
+  if (!caps) return false;
+  if (c.id === 'dxv' && !caps.hasDxv) return true;
+  if ((c.id === 'hap' || c.id === 'hap_q') && !caps.hasHap) return true;
+  if (c.id === 'hevc' && !caps.hasX265) return true;
+  return false;
+}
+
+function currentCodec() {
+  return Codecs.byId($('r-codec').value) || Codecs.byId('prores_hq');
+}
+
+function refreshCodecUI() {
+  const def = currentCodec();
+  // alpha choices
+  const alphaSel = $('r-alpha');
+  [...alphaSel.options].forEach((o) => {
+    o.disabled = o.value !== 'none' && !def.alpha.includes(o.value);
+  });
+  if (alphaSel.selectedOptions[0] && alphaSel.selectedOptions[0].disabled) alphaSel.value = 'none';
+  alphaSel.disabled = !def.alpha.length;
+  // depth choices
+  const depthSel = $('r-depth');
+  [...depthSel.options].forEach((o) => {
+    o.disabled = !def.depths.includes(parseInt(o.value, 10));
+  });
+  if (depthSel.selectedOptions[0] && depthSel.selectedOptions[0].disabled) depthSel.value = String(def.depths[0]);
+  depthSel.disabled = def.depths.length <= 1;
+  // bitrate
+  $('r-bitrate-row').style.display = def.bitrate ? '' : 'none';
+  // note
+  const notes = [];
+  if (def.unsupported) notes.push(def.unsupported);
+  if (def.id === 'dxv') notes.push('DXT1 — plays natively in Resolume.');
+  if (def.sequence) notes.push('Frames are written into a new folder per export.');
+  if (def.still) notes.push('One remapped frame at the current preview time — ideal for PowerPoint.');
+  if (def.id === 'prores_4444' && $('r-alpha').value !== 'none') notes.push('Alpha requires footage with an alpha channel.');
+  $('r-codec-note').textContent = notes.join(' ');
+  // still settings only relevant when image footage is selected (or still codec)
+  const anyImage = rp.files.some((f) => f.selected !== false && f.isImage);
+  $('r-still-row').style.display = anyImage && !def.still ? '' : 'none';
+  updateStartButton();
+}
+
+async function sameAsSource() {
+  const f = activeFile() || rp.files.find((x) => x.selected !== false);
+  if (!f) {
+    alert('Add footage first.');
+    return;
+  }
+  const m = Codecs.matchSource(f.probe);
+  const def = Codecs.byId(m.codec);
+  if (def && !def.unsupported && !runtimeUnsupported(def)) {
+    $('r-codec').value = m.codec;
+  }
+  refreshCodecUI();
+  if (Codecs.byId($('r-codec').value).depths.includes(m.depth)) $('r-depth').value = String(m.depth);
+  if (m.alpha !== 'none' && Codecs.byId($('r-codec').value).alpha.includes(m.alpha)) $('r-alpha').value = m.alpha;
+  $('r-bitrate').value = m.bitrateMbps || '';
+  refreshCodecUI();
+  $('r-codec-note').textContent = m.note;
+}
+
+// ---------------- test pattern ----------------
+async function addTestPattern() {
+  const IW = project.input.width, IH = project.input.height;
+  const maxDim = 8192;
+  const k = Math.min(1, maxDim / Math.max(IW, IH));
+  const c = document.createElement('canvas');
+  c.width = Math.round(IW * k);
+  c.height = Math.round(IH * k);
+  const g = c.getContext('2d');
+  // checker background
+  const cell = Math.max(16, Math.round(52 * k));
+  for (let y = 0, j = 0; y < c.height; y += cell, j++) {
+    for (let x = 0, i = 0; x < c.width; x += cell, i++) {
+      g.fillStyle = (i + j) % 2 ? '#2b2f33' : '#383e43';
+      g.fillRect(x, y, cell, cell);
+    }
+  }
+  // 100px grid
+  g.strokeStyle = 'rgba(255,255,255,0.25)';
+  g.lineWidth = 1;
+  for (let x = 0; x <= IW; x += 100) {
+    g.beginPath(); g.moveTo(x * k, 0); g.lineTo(x * k, c.height); g.stroke();
+  }
+  for (let y = 0; y <= IH; y += 100) {
+    g.beginPath(); g.moveTo(0, y * k); g.lineTo(c.width, y * k); g.stroke();
+  }
+  // per-slice markers
+  const colors = ['#f7941e', '#35e0b2', '#4fa3ff', '#e85dd0', '#ffd028', '#7fe860'];
+  project.slices.forEach((s, i) => {
+    if (s.enabled === false) return;
+    const col = colors[i % colors.length];
+    const x = s.in.x * k, y = s.in.y * k, w = s.in.w * k, h = s.in.h * k;
+    g.strokeStyle = col;
+    g.lineWidth = Math.max(2, 3 * k);
+    g.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    g.beginPath();
+    g.moveTo(x, y); g.lineTo(x + w, y + h);
+    g.moveTo(x + w, y); g.lineTo(x, y + h);
+    g.stroke();
+    g.beginPath();
+    g.arc(x + w / 2, y + h / 2, Math.min(w, h) / 2 - 2, 0, Math.PI * 2);
+    g.stroke();
+    const fs = Math.max(11, Math.min(h * 0.35, w * 0.08));
+    g.font = `bold ${fs}px -apple-system, sans-serif`;
+    g.fillStyle = '#ffffff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(`${i + 1} · ${s.name} · ${s.in.w}×${s.in.h}`, x + w / 2, y + h / 2);
+  });
+  const dataUrl = c.toDataURL('image/png');
+  try {
+    const p = await api.writeTempDataUrl(`testpattern-${sanitizeName(project.name)}.png`, dataUrl);
+    await addFootage([p], { select: true });
+  } catch (e) {
+    alert('Test pattern failed: ' + (e.message || e));
+  }
+}
+
+// ---------------- rasterized polygon masks for export ----------------
+async function buildMaskFiles(screenId) {
+  const out = {};
+  for (const eff of Geometry.effectiveSlices(project, screenId)) {
+    if (!eff.polyMask) continue;
+    const s = eff.slice;
+    const poly = Geometry.maskPolyInPlace(s, eff);
+    if (!poly) continue;
+    const c = document.createElement('canvas');
+    c.width = Math.max(2, eff.place.w);
+    c.height = Math.max(2, eff.place.h);
+    const g = c.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#fff';
+    g.beginPath();
+    poly.forEach((p, i) => (i === 0 ? g.moveTo(p.x, p.y) : g.lineTo(p.x, p.y)));
+    g.closePath();
+    g.fill();
+    out[s.id] = await api.writeTempDataUrl(`mask-${sanitizeName(s.name)}-${s.id}.png`, c.toDataURL('image/png'));
+  }
+  return out;
+}
+
+// ---------------- start export ----------------
+async function startRender(filesOverride) {
+  if (rp.running) return;
+  const files = filesOverride || rp.files.filter((f) => f.selected !== false);
+  if (!files.length) return;
+  const codecId = $('r-codec').value;
+  const def = Codecs.byId(codecId);
+  const alpha = $('r-alpha').value;
+  const depth = parseInt($('r-depth').value, 10);
+  const bitrateMbps = parseFloat($('r-bitrate').value) || null;
   const fps = clampInt($('r-fps').value, 1, 240);
   const imageDuration = clampInt($('r-dur').value, 1, 3600);
-  const OW = project.output.width, OH = project.output.height;
-  const outExt = codec === 'png' ? 'png' : 'mov';
 
   const jobs = [];
-  for (const f of rp.files) {
-    const pp = await api.pathParse(f.path);
-    const dest = rp.destDir || pp.dir;
-    const outPath = await api.pathJoin(dest, `${pp.base}_remap_${OW}x${OH}.${outExt}`);
-    jobs.push({
-      src: f.path,
-      isImage: f.isImage,
-      outPath,
-      transform: f.transform,
-      pngTime: codec === 'png' && !f.isImage ? f.frameTime || 0 : 0,
-    });
+  const maskCache = {};
+  const multiScreen = project.screens.length > 1;
+  for (const scr of project.screens) {
+    if (!(scr.id in maskCache)) maskCache[scr.id] = await buildMaskFiles(scr.id);
+    let OW = Math.round(scr.width);
+    let OH = Math.round(scr.height);
+    if (OW % 2) OW += 1;
+    if (OH % 2) OH += 1;
+    const scrSuffix = multiScreen ? `_${sanitizeName(scr.name)}` : '';
+    for (const f of files) {
+      const pp = await api.pathParse(f.path);
+      const dest = rp.destDir || pp.dir;
+      const stem = `${pp.base}_remap_${codecId}${alpha !== 'none' ? '_' + alpha : ''}_${OW}x${OH}${scrSuffix}`;
+      let outPath, outDir = null;
+      if (def.sequence) {
+        outDir = await api.pathJoin(dest, stem + '_seq');
+        outPath = await api.pathJoin(outDir, 'frame_%05d.png');
+      } else {
+        outPath = await api.pathJoin(dest, `${stem}.${def.ext}`);
+      }
+      jobs.push({
+        src: f.path,
+        isImage: f.isImage,
+        outPath,
+        outDir,
+        transform: f.transform,
+        inSec: f.inSec,
+        outSec: f.outSec,
+        pngTime: def.still && !def.sequence && !f.isImage ? f.frameTime || f.inSec || 0 : 0,
+        screen: { id: scr.id, name: scr.name, width: scr.width, height: scr.height },
+        maskFiles: maskCache[scr.id],
+        label: multiScreen ? `${baseName(f.path)} → ${scr.name}` : baseName(f.path),
+      });
+    }
   }
 
   rp.running = true;
-  $('r-start').disabled = true;
+  updateStartButton();
   $('rp-add').disabled = true;
   $('r-progress').style.display = '';
   $('r-log').innerHTML = '';
@@ -1231,11 +1741,14 @@ async function startRender() {
     project: {
       name: project.name,
       input: project.input,
-      output: project.output,
+      screens: project.screens,
       slices: project.slices,
     },
     jobs,
-    codec,
+    codec: codecId,
+    alpha,
+    depth,
+    bitrateMbps,
     fps,
     imageDuration,
   };
@@ -1245,8 +1758,9 @@ async function startRender() {
     $('r-log').innerHTML += `<div class="err">✗ ${String(err.message || err).split('\n')[0]}</div>`;
   }
   rp.running = false;
-  $('r-start').disabled = !rp.files.length;
+  updateStartButton();
   $('rp-add').disabled = false;
+  processWatchQueue();
 }
 
 function onRenderEvent(ev) {
@@ -1254,7 +1768,7 @@ function onRenderEvent(ev) {
   if (!bar) return;
   const jobPart = 100 / Math.max(1, ev.total);
   if (ev.type === 'job-start') {
-    plabel.textContent = `(${ev.index + 1}/${ev.total}) ${baseName(ev.file)}`;
+    plabel.textContent = `(${ev.index + 1}/${ev.total}) ${ev.label || baseName(ev.file)}`;
     bar.style.width = `${ev.index * jobPart}%`;
     ppct.textContent = '0%';
   } else if (ev.type === 'progress') {
@@ -1264,7 +1778,7 @@ function onRenderEvent(ev) {
     bar.style.width = `${(ev.index + 1) * jobPart}%`;
     const div = document.createElement('div');
     div.className = 'ok';
-    div.textContent = `✓ ${baseName(ev.out)} `;
+    div.textContent = `✓ ${ev.label || baseName(ev.out)} `;
     const a = document.createElement('a');
     a.href = '#';
     a.textContent = 'show in Finder';
@@ -1275,13 +1789,42 @@ function onRenderEvent(ev) {
   } else if (ev.type === 'job-error') {
     const div = document.createElement('div');
     div.className = 'err';
-    div.textContent = `✗ ${String(ev.error).split('\n')[0]}`;
+    div.textContent = `✗ ${ev.label ? ev.label + ': ' : ''}${String(ev.error).split('\n')[0]}`;
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
   } else if (ev.type === 'batch-done') {
     plabel.textContent = ev.cancelled ? 'Cancelled' : 'Done';
     if (!ev.cancelled) { bar.style.width = '100%'; ppct.textContent = '100%'; }
   }
+}
+
+// ---------------- watch folder ----------------
+async function onWatchFile(p) {
+  if (rp.files.some((f) => f.path === p)) return;
+  await addFootage([p]);
+  const log = $('r-log');
+  if (log) {
+    const div = document.createElement('div');
+    div.textContent = `👁 New file: ${baseName(p)}`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+  if ($('w-auto').checked) {
+    const f = rp.files.find((x) => x.path === p);
+    if (f) {
+      if (rp.running) {
+        rp.watchQueue.push(f);
+      } else {
+        startRender([f]);
+      }
+    }
+  }
+}
+
+function processWatchQueue() {
+  if (!rp.watchQueue.length || rp.running) return;
+  const batch = rp.watchQueue.splice(0);
+  startRender(batch);
 }
 
 // ---------------- import / export / open / save ----------------
@@ -1303,6 +1846,7 @@ async function importXmlPath(p) {
     pushHistory();
     project = migrateProject(proj);
     selId = null;
+    activeScreenId = project.screens[0].id;
     await loadAllRefs();
     fitView('input');
     fitView('output');
@@ -1344,6 +1888,7 @@ async function openProject() {
     pushHistory();
     project = migrateProject(JSON.parse(text));
     selId = null;
+    activeScreenId = project.screens[0].id;
     await loadAllRefs();
     fitView('input');
     fitView('output');
@@ -1393,6 +1938,7 @@ function bindUI() {
     pushHistory();
     project = newProject();
     selId = null;
+    activeScreenId = project.screens[0].id;
     await loadAllRefs();
     fitView('input');
     fitView('output');
@@ -1428,20 +1974,80 @@ function bindUI() {
 
   // project fields
   $('p-name').onchange = () => { pushHistory(); project.name = $('p-name').value || 'Untitled'; markDirty(); };
-  const bindDim = (id, objGetter, key) => {
+  const bindInputDim = (id, key) => {
     $(id).onchange = () => {
       pushHistory();
-      objGetter()[key] = clampInt($(id).value, 1, 32768);
-      $(id).value = objGetter()[key];
+      project.input[key] = clampInt($(id).value, 1, 32768);
+      $(id).value = project.input[key];
       draw();
       drawRenderPreview();
       markDirty();
     };
   };
-  bindDim('in-w', () => project.input, 'width');
-  bindDim('in-h', () => project.input, 'height');
-  bindDim('out-w', () => project.output, 'width');
-  bindDim('out-h', () => project.output, 'height');
+  bindInputDim('in-w', 'width');
+  bindInputDim('in-h', 'height');
+
+  // screens
+  $('p-screen-select').onchange = () => {
+    activeScreenId = $('p-screen-select').value;
+    refreshScreenSelectors();
+    if (view === 'output') { fitView('output'); }
+    refreshSliceList();
+    draw();
+  };
+  $('screen-select').onchange = () => {
+    activeScreenId = $('screen-select').value;
+    refreshScreenSelectors();
+    fitView('output');
+    refreshSliceList();
+    draw();
+  };
+  $('p-screen-add').onclick = () => {
+    pushHistory();
+    const n = project.screens.length + 1;
+    const sc = { id: 'scr' + Math.random().toString(36).slice(2, 7), name: 'Output #' + n, width: 1920, height: 1080 };
+    project.screens.push(sc);
+    activeScreenId = sc.id;
+    refreshScreenSelectors();
+    refreshSliceList();
+    draw();
+    markDirty();
+  };
+  $('p-screen-del').onclick = () => {
+    if (project.screens.length <= 1) return;
+    const sc = activeScreen();
+    if (!confirm(`Delete screen "${sc.name}"? Its slices move to the first screen.`)) return;
+    pushHistory();
+    project.screens.splice(project.screens.indexOf(sc), 1);
+    project.slices.forEach((s) => {
+      if (s.screenId === sc.id) s.screenId = project.screens[0].id;
+    });
+    activeScreenId = project.screens[0].id;
+    refreshScreenSelectors();
+    refreshSliceList();
+    draw();
+    markDirty();
+  };
+  $('scr-name').onchange = () => {
+    pushHistory();
+    activeScreen().name = $('scr-name').value || 'Output';
+    refreshScreenSelectors();
+    refreshSliceList();
+    markDirty();
+  };
+  const bindScreenDim = (id, key) => {
+    $(id).onchange = () => {
+      pushHistory();
+      activeScreen()[key] = clampInt($(id).value, 1, 32768);
+      $(id).value = activeScreen()[key];
+      refreshScreenSelectors();
+      draw();
+      drawRenderPreview();
+      markDirty();
+    };
+  };
+  bindScreenDim('out-w', 'width');
+  bindScreenDim('out-h', 'height');
 
   // slice fields
   $('sl-name').onchange = () => {
@@ -1458,6 +2064,15 @@ function bindUI() {
     if (!s) return;
     pushHistory();
     s.enabled = $('sl-enabled').checked;
+    refreshSliceList();
+    draw();
+    markDirty();
+  };
+  $('sl-screen').onchange = () => {
+    const s = selected();
+    if (!s) return;
+    pushHistory();
+    s.screenId = $('sl-screen').value;
     refreshSliceList();
     draw();
     markDirty();
@@ -1515,7 +2130,7 @@ function bindUI() {
     if (!s) return;
     pushHistory();
     if ($('mask-enabled').checked) {
-      if (!s.mask) s.mask = { enabled: true, ...s.in };
+      if (!s.mask || !s.mask.points) s.mask = { enabled: true, points: Geometry.rectToPoints(s.in) };
       s.mask.enabled = true;
     } else if (s.mask) {
       s.mask.enabled = false;
@@ -1532,28 +2147,41 @@ function bindUI() {
     const s = selected();
     if (!s) return;
     pushHistory();
-    s.mask = { enabled: true, ...s.in };
+    s.mask = { enabled: true, points: Geometry.rectToPoints(s.in) };
     refreshProps();
     draw();
     markDirty();
   };
-  const bindMask = (id, key) => {
+  // numeric mask bbox fields translate/scale the polygon
+  const bindMaskBBox = (id, key) => {
     $(id).onchange = () => {
       const s = selected();
-      if (!s || !s.mask) return;
+      if (!s || !s.mask || !s.mask.points) return;
+      const bb = Geometry.maskBBox(s.mask);
+      if (!bb) return;
       pushHistory();
-      const isSize = key === 'w' || key === 'h';
-      s.mask[key] = clampInt($(id).value, isSize ? 1 : -100000, 100000);
-      $(id).value = s.mask[key];
+      const val = clampInt($(id).value, key === 'w' || key === 'h' ? 1 : -100000, 100000);
+      if (key === 'x' || key === 'y') {
+        const d = val - bb[key];
+        s.mask.points.forEach((p) => (p[key] += d));
+      } else {
+        const axis = key === 'w' ? 'x' : 'y';
+        const scaleF = val / bb[key];
+        s.mask.points.forEach((p) => {
+          p[axis] = Math.round(bb[axis] + (p[axis] - bb[axis]) * scaleF);
+        });
+      }
+      refreshProps();
       draw();
       markDirty();
     };
   };
-  bindMask('mask-x', 'x'); bindMask('mask-y', 'y');
-  bindMask('mask-w', 'w'); bindMask('mask-h', 'h');
+  bindMaskBBox('mask-x', 'x'); bindMaskBBox('mask-y', 'y');
+  bindMaskBBox('mask-w', 'w'); bindMaskBBox('mask-h', 'h');
 
   // editor canvas
   canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('dblclick', onDblClick);
   window.addEventListener('mousemove', (e) => {
     if (drag) {
       const rect = canvas.getBoundingClientRect();
@@ -1565,6 +2193,16 @@ function bindUI() {
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  // right-click on any slider with data-default resets it (like Resolume)
+  document.addEventListener('contextmenu', (e) => {
+    const t = e.target;
+    if (t && t.matches && t.matches('input[type="range"][data-default]')) {
+      e.preventDefault();
+      t.value = t.dataset.default;
+      t.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+
   // keyboard
   window.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
@@ -1575,7 +2213,11 @@ function bindUI() {
       if (e.shiftKey) redo(); else undo();
       return;
     }
-    if (page !== 'editor') return;
+    if (page === 'render') {
+      if (e.key.toLowerCase() === 'i') { $('rp-set-in').click(); return; }
+      if (e.key.toLowerCase() === 'o') { $('rp-set-out').click(); return; }
+      return;
+    }
     if (e.code === 'Space') { spaceDown = true; canvas.style.cursor = 'grab'; return; }
     const s = selected();
     if ((e.key === 'Delete' || e.key === 'Backspace') && s) { e.preventDefault(); deleteSlice(); return; }
@@ -1584,11 +2226,15 @@ function bindUI() {
       e.preventDefault();
       pushHistoryThrottled(800);
       const d = e.shiftKey ? 10 : 1;
-      const r = editTargetRect(s);
-      if (e.key === 'ArrowLeft') r.x -= d;
-      if (e.key === 'ArrowRight') r.x += d;
-      if (e.key === 'ArrowUp') r.y -= d;
-      if (e.key === 'ArrowDown') r.y += d;
+      const dx = e.key === 'ArrowLeft' ? -d : e.key === 'ArrowRight' ? d : 0;
+      const dy = e.key === 'ArrowUp' ? -d : e.key === 'ArrowDown' ? d : 0;
+      if (maskEditActive()) {
+        s.mask.points.forEach((p) => { p.x += dx; p.y += dy; });
+      } else {
+        const r = sliceRect(s, view);
+        r.x += dx;
+        r.y += dy;
+      }
       refreshProps();
       draw();
       markDirty();
@@ -1615,6 +2261,7 @@ function bindUI() {
         pushHistory();
         project = migrateProject(JSON.parse(await api.readFileText(projs[0])));
         selId = null;
+        activeScreenId = project.screens[0].id;
         await loadAllRefs();
         fitView('input');
         fitView('output');
@@ -1633,7 +2280,28 @@ function bindUI() {
     }
   });
 
-  // render page
+  // export page
+  $('rp-tab-input').onclick = () => {
+    rp.viewMode = 'input';
+    $('rp-tab-input').classList.add('active');
+    $('rp-tab-output').classList.remove('active');
+    refreshScreenSelectors();
+    fitRenderView();
+    drawRenderPreview();
+  };
+  $('rp-tab-output').onclick = () => {
+    rp.viewMode = 'output';
+    $('rp-tab-output').classList.add('active');
+    $('rp-tab-input').classList.remove('active');
+    refreshScreenSelectors();
+    fitRenderView();
+    drawRenderPreview();
+  };
+  $('rp-screen-select').onchange = () => {
+    rp.screenId = $('rp-screen-select').value;
+    fitRenderView();
+    drawRenderPreview();
+  };
   $('rp-add').onclick = async () => {
     const paths = await api.openDialog({
       title: 'Choose stageview footage',
@@ -1643,7 +2311,13 @@ function bindUI() {
         { name: 'All files', extensions: ['*'] },
       ],
     });
-    if (paths.length) addFootage(paths);
+    if (paths.length) addFootage(paths, { select: true });
+  };
+  $('rp-testpattern').onclick = addTestPattern;
+  $('rp-select-all').onclick = () => {
+    const allSel = rp.files.every((f) => f.selected !== false);
+    rp.files.forEach((f) => (f.selected = !allSel));
+    refreshFileList();
   };
   $('rp-remove').onclick = () => {
     if (rp.activeIndex < 0) return;
@@ -1651,11 +2325,39 @@ function bindUI() {
     rp.activeIndex = Math.min(rp.activeIndex, rp.files.length - 1);
     refreshFileList();
     refreshClipControls();
+    refreshTrimUI();
     if (activeFile()) selectFile(rp.activeIndex);
     else drawRenderPreview();
   };
   $('rp-time').oninput = () => { updateTimeLabel(); fetchFrame(false); };
   $('rp-refresh').onclick = () => fetchFrame(true);
+  $('rp-set-in').onclick = () => {
+    const f = activeFile();
+    if (!f || f.isImage) return;
+    f.inSec = parseFloat($('rp-time').value) || 0;
+    if (f.outSec != null && f.outSec <= f.inSec) f.outSec = null;
+    refreshTrimUI();
+    updateTimeLabel();
+  };
+  $('rp-set-out').onclick = () => {
+    const f = activeFile();
+    if (!f || f.isImage) return;
+    f.outSec = parseFloat($('rp-time').value) || 0;
+    if (f.inSec != null && f.inSec >= f.outSec) f.inSec = null;
+    refreshTrimUI();
+    updateTimeLabel();
+  };
+  $('rp-clear-trim').onclick = () => {
+    const f = activeFile();
+    if (!f) return;
+    f.inSec = null;
+    f.outSec = null;
+    refreshTrimUI();
+    updateTimeLabel();
+  };
+  $('r-codec').onchange = refreshCodecUI;
+  $('r-alpha').onchange = refreshCodecUI;
+  $('r-same-as-source').onclick = sameAsSource;
   $('r-dest-btn').onclick = async () => {
     const dir = await api.openDirDialog({ title: 'Choose output folder' });
     if (dir) {
@@ -1663,9 +2365,33 @@ function bindUI() {
       $('r-dest').textContent = dir;
     }
   };
-  $('r-start').onclick = startRender;
+  $('r-start').onclick = () => startRender();
   $('r-cancel').onclick = () => api.renderCancel();
   bindClipControls();
+
+  // watch folder
+  $('w-choose').onclick = async () => {
+    const dir = await api.openDirDialog({ title: 'Choose watch folder' });
+    if (!dir) return;
+    rp.watchDir = dir;
+    $('w-dir').textContent = dir;
+    $('w-toggle').disabled = false;
+  };
+  $('w-toggle').onclick = async () => {
+    if (!rp.watchDir) return;
+    if (rp.watching) {
+      await api.watchStop();
+      rp.watching = false;
+      $('w-toggle').textContent = 'Start';
+      $('w-toggle').classList.remove('accent');
+    } else {
+      await api.watchStart(rp.watchDir);
+      rp.watching = true;
+      $('w-toggle').textContent = 'Stop';
+      $('w-toggle').classList.add('accent');
+    }
+  };
+  api.onWatchFile(onWatchFile);
 
   new ResizeObserver(() => {
     if (page === 'editor') resizeCanvas();
@@ -1684,7 +2410,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(location.search);
   const demo = params.get('demo') === '1';
   project = (!demo && loadLocal()) || demoProject();
+  activeScreenId = project.screens[0].id;
+  rp.screenId = project.screens[0].id;
 
+  buildCodecSelect();
   bindUI();
   updateUndoButtons();
   await loadAllRefs();
@@ -1692,6 +2421,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   fitView('input');
   fitView('output');
   refreshAll();
+  refreshCodecUI();
 
   try {
     caps = await api.ffmpegCaps();
@@ -1699,6 +2429,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     caps = null;
   }
   refreshEngineInfo();
+  buildCodecSelect();
+  refreshCodecUI();
 
   if (params.get('page') === 'render') switchPage('render');
 });

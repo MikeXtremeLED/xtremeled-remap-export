@@ -1,20 +1,22 @@
 'use strict';
 // ffmpeg render pipeline: stageview source -> clip transform -> crop/rotate/flip/scale/overlay
-// per slice -> output canvas. ProRes 422 HQ via prores_ks; DXV3 via the bundled ffmpeg 8.
+// per slice -> output canvas. Full codec matrix (ProRes/DXV/HAP/HEVC/H.264/PNG) with alpha
+// and bit-depth options, in/out trim, PNG sequences, polygon masks and multi-screen output.
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const Geometry = require('../shared/geometry');
+const Codecs = require('../shared/codecs');
+
+// Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg)
+const bundledDxvFfmpeg = path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv', 'ffmpeg');
 
 let ffmpegStatic = null;
 try {
   ffmpegStatic = require('ffmpeg-static');
 } catch (e) {
-  /* optioneel */
+  /* optional */
 }
-
-// Meegeleverde ffmpeg 8.x met DXV-encoder (bin/ffmpeg-dxv/ffmpeg)
-const bundledDxvFfmpeg = path.join(__dirname, '..', '..', 'bin', 'ffmpeg-dxv', 'ffmpeg');
 
 let currentProc = null;
 let cancelled = false;
@@ -49,6 +51,8 @@ function getCapabilities(force) {
         path: p,
         version,
         hasDxv: /\sdxv\s/.test(encs),
+        hasHap: /\shap\s/.test(encs),
+        hasX265: /libx265/.test(encs),
         hasProres: /prores_ks/.test(encs),
       });
     } catch (e) {
@@ -57,16 +61,30 @@ function getCapabilities(force) {
   }
   const prores = entries.find((x) => x.hasProres) || null;
   const dxv = entries.find((x) => x.hasDxv) || null;
+  const hap = entries.find((x) => x.hasHap) || null;
+  const x265 = entries.find((x) => x.hasX265) || null;
   capsCache = {
     entries,
     proresPath: prores ? prores.path : null,
     dxvPath: dxv ? dxv.path : null,
+    hapPath: hap ? hap.path : null,
+    x265Path: x265 ? x265.path : null,
     hasDxv: !!dxv,
+    hasHap: !!hap,
+    hasX265: !!x265,
   };
   return capsCache;
 }
 
-// Probe duration / fps / resolution / audio of a source file via ffmpeg -i.
+function ffmpegForCodec(codecId) {
+  const caps = getCapabilities();
+  if (codecId === 'dxv') return caps.dxvPath;
+  if (codecId === 'hap' || codecId === 'hap_q') return caps.hapPath;
+  if (codecId === 'hevc') return caps.x265Path;
+  return caps.proresPath;
+}
+
+// Probe duration / fps / resolution / codec / audio of a source file via ffmpeg -i.
 function probeMedia(ffPath, file) {
   const r = spawnSync(ffPath, ['-hide_banner', '-i', file], { encoding: 'utf8', timeout: 20000 });
   const err = (r.stderr || '') + (r.stdout || '');
@@ -75,21 +93,34 @@ function probeMedia(ffPath, file) {
     fps: null,
     width: null,
     height: null,
+    videoCodec: null,
+    proresVariant: null,
+    pixFmt: null,
+    bitrateKbps: null,
     hasAudio: /Stream #[^\n]*Audio/.test(err),
   };
   const dm = err.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
   if (dm) out.durationSec = parseInt(dm[1], 10) * 3600 + parseInt(dm[2], 10) * 60 + parseFloat(dm[3]);
   const fm = err.match(/(\d+(?:\.\d+)?)\s*fps/) || err.match(/(\d+(?:\.\d+)?)\s*tbr/);
   if (fm) out.fps = parseFloat(fm[1]);
-  const rm = err.match(/Video:[^\n]*?(\d{2,5})x(\d{2,5})/);
+  const vline = (err.match(/Stream #[^\n]*Video:[^\n]*/) || [''])[0];
+  const rm = vline.match(/(\d{2,5})x(\d{2,5})/);
   if (rm) {
     out.width = parseInt(rm[1], 10);
     out.height = parseInt(rm[2], 10);
   }
+  const cm = vline.match(/Video:\s*(\w+)/);
+  if (cm) out.videoCodec = cm[1];
+  const pv = vline.match(/\((ap\w\w|ap4x)\s*\//);
+  if (pv) out.proresVariant = pv[1];
+  const pf = vline.match(/,\s*(yuva?\d+p?\d*[a-z]*|rgba?|gray\d*[a-z]*|rgb\d+[a-z]*)/);
+  if (pf) out.pixFmt = pf[1];
+  const br = err.match(/bitrate:\s*(\d+)\s*kb\/s/);
+  if (br) out.bitrateKbps = parseInt(br[1], 10);
   return out;
 }
 
-// Extract a single frame as PNG buffer (for the render page live preview).
+// Extract a single frame as PNG buffer (for the export page live preview).
 function extractFrame(src, timeSec) {
   const caps = getCapabilities();
   const ffPath = caps.proresPath;
@@ -110,7 +141,7 @@ function extractFrame(src, timeSec) {
   return 'data:image/png;base64,' + r.stdout.toString('base64');
 }
 
-const effectiveSlices = (project) => Geometry.effectiveSlices(project);
+const effectiveSlices = (project, screenId) => Geometry.effectiveSlices(project, screenId);
 
 // ffmpeg filter ops for slice content rotation (clockwise) + flip
 function contentOps(rot, flip) {
@@ -138,40 +169,60 @@ function adjustOps(t) {
   return ops;
 }
 
+// Build ffmpeg args for one job.
+// job: {src, isImage, outPath, transform, inSec, outSec, pngTime, screen:{width,height,id},
+//       maskFiles: {sliceId: pngPath}}
+// opts: {codec, alpha, depth, bitrateMbps, fps, imageDuration}
 function buildArgs(project, job, opts, probe) {
+  const codecDef = Codecs.byId(opts.codec);
+  if (!codecDef) throw new Error(`Unknown codec "${opts.codec}"`);
+  if (codecDef.unsupported) throw new Error(codecDef.unsupported);
+
   const IW = Math.max(1, Math.round(project.input.width));
   const IH = Math.max(1, Math.round(project.input.height));
-  let OW = Math.max(2, Math.round(project.output.width));
-  let OH = Math.max(2, Math.round(project.output.height));
-  if (OW % 2) OW += 1; // ProRes 4:2:2 requires even width
+  const screen = job.screen || Geometry.screenOf(project) || { width: 1920, height: 1080 };
+  let OW = Math.max(2, Math.round(screen.width));
+  let OH = Math.max(2, Math.round(screen.height));
+  if (OW % 2) OW += 1; // even dimensions for 4:2:x codecs
   if (OH % 2) OH += 1;
 
-  const sl = effectiveSlices(project);
-  if (!sl.length) throw new Error('No enabled slices inside the input canvas');
+  const sl = effectiveSlices(project, job.screen ? job.screen.id : undefined);
+  if (!sl.length) throw new Error('No enabled slices inside the input canvas' + (job.screen ? ` for screen "${job.screen.name}"` : ''));
 
-  const isPng = opts.codec === 'png';
-  const fps = job.isImage || isPng ? opts.fps || 50 : (probe && probe.fps) || 25;
-  const dur = job.isImage && !isPng ? opts.imageDuration || 1 : null;
+  const isStill = !!codecDef.still;
+  const isSeq = !!codecDef.sequence;
+  const alpha = opts.alpha && codecDef.alpha.includes(opts.alpha) ? opts.alpha : 'none';
+  const useAlphaPipeline = alpha !== 'none';
+  const fps = job.isImage || isStill ? opts.fps || 50 : (probe && probe.fps) || 25;
+  const dur = job.isImage && !isStill ? opts.imageDuration || 1 : null;
 
+  // trim (videos only)
+  const inSec = !job.isImage && job.inSec > 0 ? job.inSec : 0;
+  const outSec = !job.isImage && job.outSec > inSec ? job.outSec : null;
+
+  const baseColor = useAlphaPipeline ? 'black@0.0' : 'black';
+  const fmtRGBA = useAlphaPipeline ? ',format=rgba' : '';
   const parts = [];
   const tr = job.transform;
+
   if (!Geometry.isIdentityTransform(tr) && probe && probe.width && probe.height) {
-    // Clip transform: position / scale / rotate the source on the input canvas
     const lay = Geometry.clipLayout(probe.width, probe.height, tr, IW, IH);
     const bw = Math.max(2, Math.round(lay.bw));
     const bh = Math.max(2, Math.round(lay.bh));
     const chain = [`scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
+    if (useAlphaPipeline) chain.push('format=rgba');
     if (tr.rotation) {
       chain.push(
-        `rotate=${lay.angleRad.toFixed(6)}:ow=${Math.max(2, Math.ceil(lay.rw))}:oh=${Math.max(2, Math.ceil(lay.rh))}:c=black`
+        `rotate=${lay.angleRad.toFixed(6)}:ow=${Math.max(2, Math.ceil(lay.rw))}:oh=${Math.max(2, Math.ceil(lay.rh))}:c=black${useAlphaPipeline ? '@0.0' : ''}`
       );
     }
     chain.push(...adjustOps(tr));
     parts.push(`[0:v]${chain.join(',')}[clip]`);
-    parts.push(`color=c=black:s=${IW}x${IH}:r=${fps}[ibase]`);
+    parts.push(`color=c=${baseColor}:s=${IW}x${IH}:r=${fps}${fmtRGBA}[ibase]`);
     parts.push(`[ibase][clip]overlay=${Math.round(lay.x)}:${Math.round(lay.y)}:shortest=1[src]`);
   } else {
     const chain = [`scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr)];
+    if (useAlphaPipeline) chain.push('format=rgba');
     parts.push(`[0:v]${chain.join(',')}[src]`);
   }
 
@@ -180,49 +231,65 @@ function buildArgs(project, job, opts, probe) {
   } else {
     parts.push('[src]null[s0]');
   }
+
+  // polygon mask inputs (rasterized PNGs supplied by the renderer)
+  const maskInputs = [];
   sl.forEach((s, i) => {
+    const maskFile = s.polyMask && job.maskFiles ? job.maskFiles[s.slice.id] : null;
     const ops = [
       `crop=${s.crop.w}:${s.crop.h}:${s.crop.x}:${s.crop.y}`,
       ...contentOps(s.rot, s.flip),
       `scale=${s.place.w}:${s.place.h}:flags=bicubic`,
     ];
-    parts.push(`[s${i}]${ops.join(',')}[c${i}]`);
+    if (maskFile) {
+      const mIdx = 1 + maskInputs.length;
+      maskInputs.push(maskFile);
+      parts.push(`[s${i}]${ops.join(',')},format=rgba[cc${i}]`);
+      parts.push(`[${mIdx}:v]scale=${s.place.w}:${s.place.h},format=gray[mm${i}]`);
+      parts.push(`[cc${i}][mm${i}]alphamerge[c${i}]`);
+    } else {
+      parts.push(`[s${i}]${ops.join(',')}[c${i}]`);
+    }
   });
-  parts.push(`color=c=black:s=${OW}x${OH}:r=${fps}[base]`);
+
+  parts.push(`color=c=${baseColor}:s=${OW}x${OH}:r=${fps}${fmtRGBA}[base]`);
   let prev = 'base';
   sl.forEach((s, i) => {
-    const outLabel = i === sl.length - 1 ? 'out' : `o${i}`;
+    const last = i === sl.length - 1;
+    const outLabel = last ? (alpha === 'only' ? 'pre' : 'out') : `o${i}`;
     const shortest = i === 0 ? ':shortest=1' : '';
     parts.push(`[${prev}][c${i}]overlay=${s.place.x}:${s.place.y}${shortest}[${outLabel}]`);
     prev = outLabel;
   });
+  if (alpha === 'only') parts.push('[pre]alphaextract[out]');
 
+  // input args
   let inputArgs;
-  if (job.isImage && !isPng) {
+  if (job.isImage && !isStill) {
     inputArgs = ['-loop', '1', '-t', String(dur), '-i', job.src];
-  } else if (isPng && !job.isImage && job.pngTime > 0) {
-    inputArgs = ['-ss', String(job.pngTime), '-i', job.src]; // still from the chosen preview time
+  } else if (isStill && !isSeq && !job.isImage && job.pngTime > 0) {
+    inputArgs = ['-ss', String(job.pngTime), '-i', job.src];
+  } else if (!job.isImage && inSec > 0) {
+    inputArgs = ['-ss', String(inSec), '-i', job.src];
   } else {
     inputArgs = ['-i', job.src];
   }
-  let codecArgs;
-  if (isPng) {
-    codecArgs = ['-frames:v', '1']; // png encoder volgt uit .png extensie
-  } else if (opts.codec === 'dxv') {
-    codecArgs = ['-c:v', 'dxv', '-pix_fmt', 'rgba'];
-  } else {
-    codecArgs = [
-      '-c:v', 'prores_ks',
-      '-profile:v', '3',
-      '-vendor', 'apl0',
-      '-pix_fmt', 'yuv422p10le',
-      '-color_primaries', 'bt709',
-      '-color_trc', 'bt709',
-      '-colorspace', 'bt709',
-    ];
-  }
-  const audioArgs =
-    !isPng && !job.isImage && probe && probe.hasAudio ? ['-map', '0:a:0', '-c:a', 'pcm_s16le'] : [];
+  for (const m of maskInputs) inputArgs.push('-i', m);
+
+  const codecArgs = isStill && !isSeq
+    ? ['-frames:v', '1', ...Codecs.encoderArgs(opts.codec, opts)]
+    : Codecs.encoderArgs(opts.codec, opts);
+
+  const wantAudio =
+    !isStill && !job.isImage && probe && probe.hasAudio && !useAlphaPipeline;
+  const audioArgs = wantAudio
+    ? codecDef.ext === 'mp4'
+      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '320k']
+      : ['-map', '0:a:0', '-c:a', 'pcm_s16le']
+    : [];
+
+  const trimOut = [];
+  if (!job.isImage && !isStill && outSec) trimOut.push('-t', String(outSec - inSec));
 
   const args = [
     '-y',
@@ -232,12 +299,23 @@ function buildArgs(project, job, opts, probe) {
     '-map', '[out]',
     ...audioArgs,
     ...codecArgs,
-    ...(job.isImage && !isPng ? ['-r', String(fps)] : []),
+    ...(job.isImage && !isStill ? ['-r', String(fps)] : []),
+    ...(isSeq && !job.isImage ? ['-fps_mode', 'passthrough'] : []),
+    ...trimOut,
     '-progress', 'pipe:1',
     '-nostats',
     job.outPath,
   ];
-  return { args, durationSec: isPng ? null : job.isImage ? dur : probe && probe.durationSec };
+  const totalDur = isStill && !isSeq
+    ? null
+    : job.isImage
+      ? dur
+      : outSec
+        ? outSec - inSec
+        : probe && probe.durationSec
+          ? probe.durationSec - inSec
+          : null;
+  return { args, durationSec: totalDur };
 }
 
 function runFfmpeg(ffPath, args, durationSec, onProgress) {
@@ -280,40 +358,37 @@ function send(win, data) {
   try {
     if (win && !win.isDestroyed()) win.webContents.send('render:event', data);
   } catch (e) {
-    /* window weg */
+    /* window gone */
   }
 }
 
 async function startBatch(win, payload) {
   cancelled = false;
-  const { project, jobs, codec, fps, imageDuration } = payload;
-  const caps = getCapabilities();
-  const ffPath = codec === 'dxv' ? caps.dxvPath : caps.proresPath;
-  if (!ffPath) {
-    throw new Error(
-      codec === 'dxv'
-        ? 'No ffmpeg with DXV encoder found (bin/ffmpeg-dxv missing?).'
-        : 'ffmpeg not found'
-    );
-  }
+  const { jobs, codec, alpha, depth, bitrateMbps, fps, imageDuration } = payload;
+  const ffPath = ffmpegForCodec(codec);
+  if (!ffPath) throw new Error('No ffmpeg found for this codec');
 
   const results = [];
   for (let i = 0; i < jobs.length; i++) {
     if (cancelled) break;
     const job = jobs[i];
-    send(win, { type: 'job-start', index: i, total: jobs.length, file: job.src });
+    const project = job.project || payload.project;
+    send(win, { type: 'job-start', index: i, total: jobs.length, file: job.src, label: job.label });
     try {
+      // PNG sequence: ensure the output folder exists
+      if (job.outDir) fs.mkdirSync(job.outDir, { recursive: true });
       const probe = probeMedia(ffPath, job.src);
-      const { args, durationSec } = buildArgs(project, job, { codec, fps, imageDuration }, probe);
+      const { args, durationSec } = buildArgs(project, job, { codec, alpha, depth, bitrateMbps, fps, imageDuration }, probe);
       await runFfmpeg(ffPath, args, durationSec, (pct) =>
         send(win, { type: 'progress', index: i, total: jobs.length, percent: pct })
       );
-      results.push({ src: job.src, out: job.outPath, ok: true });
-      send(win, { type: 'job-done', index: i, total: jobs.length, out: job.outPath });
+      const shown = job.outDir || job.outPath;
+      results.push({ src: job.src, out: shown, ok: true });
+      send(win, { type: 'job-done', index: i, total: jobs.length, out: shown, label: job.label });
     } catch (err) {
       const msg = String((err && err.message) || err);
       results.push({ src: job.src, ok: false, error: msg });
-      send(win, { type: 'job-error', index: i, total: jobs.length, error: msg });
+      send(win, { type: 'job-error', index: i, total: jobs.length, error: msg, label: job.label });
       if (cancelled) break;
     }
   }
@@ -327,13 +402,14 @@ function cancel() {
     try {
       currentProc.kill('SIGKILL');
     } catch (e) {
-      /* al gestopt */
+      /* already stopped */
     }
   }
 }
 
 module.exports = {
   getCapabilities,
+  ffmpegForCodec,
   probeMedia,
   extractFrame,
   effectiveSlices,
