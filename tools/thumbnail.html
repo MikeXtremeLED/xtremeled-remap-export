@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden;
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+  #t { width: 1280px; height: 720px; position: relative; box-sizing: border-box;
+    background: radial-gradient(120% 100% at 20% 0%, #232a30 0%, #0c0f11 60%); }
+
+  /* logo top-left */
+  .logo { position: absolute; top: 40px; left: 54px; display: flex; align-items: baseline; font-weight: 800; font-size: 30px; color: #c9cdd0; }
+  .logo .x { color: #f7941e; font-size: 40px; font-weight: 900; line-height: 0.9; }
+  .logo .t { letter-spacing: 1px; margin-left: 1px; }
+  .logo .led { display: inline; margin-left: 8px; }
+  .logo .ebars { display: inline-block; vertical-align: baseline; height: 21px; margin: 0 3px; }
+  .logo .ebars i { display: block; width: 18px; height: 5px; margin-top: 3px; border-radius: 1px; }
+  .logo .ebars i:first-child { margin-top: 0; }
+  .logo .ebars i:nth-child(1){background:#e8492e;} .logo .ebars i:nth-child(2){background:#4caf50;} .logo .ebars i:nth-child(3){background:#2196f3;}
+
+  /* headline */
+  #head { position: absolute; left: 54px; top: 150px; width: 720px; }
+  #head .l1 { color: #ffffff; font-weight: 900; font-size: 92px; line-height: 0.98; letter-spacing: -1px; text-shadow: 0 4px 30px rgba(0,0,0,0.6); }
+  #head .l1 .o { color: #f7941e; }
+  #head .l2 { color: #cfd3d6; font-weight: 700; font-size: 40px; margin-top: 22px; line-height: 1.15; }
+  #head .l2 b { color: #ffffff; }
+
+  /* free badge */
+  #free { position: absolute; left: 60px; top: 560px; background: #35e0b2; color: #08241d;
+    font-weight: 900; font-size: 40px; letter-spacing: 1px; padding: 12px 26px; border-radius: 14px;
+    transform: rotate(-4deg); box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+  #free small { font-weight: 800; font-size: 24px; }
+
+  /* right visual */
+  #vis { position: absolute; right: 46px; top: 118px; width: 470px; }
+  .vlabel { color: #8b9195; font-size: 20px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 8px 4px; }
+  .vlabel b { color: #f7941e; }
+  .arrow { text-align: center; color: #f7941e; font-size: 54px; font-weight: 900; line-height: 0.6; margin: 6px 0; }
+  .frame { background: #06080a; border: 2px solid #3a4045; border-radius: 12px; padding: 10px; }
+</style>
+</head>
+<body>
+<div id="t">
+  <div class="logo"><span class="x">X</span><span class="t">TREME</span><span class="led">L<span class="ebars"><i></i><i></i><i></i></span>D</span></div>
+
+  <div id="head">
+    <div class="l1">LED MAPPING<br>from a <span class="o">laptop</span></div>
+    <div class="l2">No media server. <b>No Resolume on site.</b><br>Just play the file.</div>
+  </div>
+
+  <div id="free">FREE <small>& open source</small></div>
+
+  <div id="vis">
+    <div class="vlabel">Stageview <b>video</b></div>
+    <div class="frame"><div id="stage"></div></div>
+    <div class="arrow">⬇</div>
+    <div class="vlabel">Output <b>3840×2160</b></div>
+    <div class="frame"><div id="output"></div></div>
+  </div>
+</div>
+
+<script>
+  const SRC_W = 2600, SRC_H = 104, K = 4;
+  const strip = document.createElement('canvas'); strip.width = SRC_W; strip.height = SRC_H;
+  (function () {
+    const g = strip.getContext('2d'); const cell = 26;
+    for (let y = 0, j = 0; y < SRC_H; y += cell, j++) for (let x = 0, i = 0; x < SRC_W; x += cell, i++) { g.fillStyle = (i + j) % 2 ? '#6f1c94' : '#9c27b0'; g.fillRect(x, y, cell, cell); }
+    g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(SRC_W, SRC_H); g.moveTo(SRC_W, 0); g.lineTo(0, SRC_H); g.stroke();
+    g.beginPath(); g.arc(SRC_W / 2, SRC_H / 2, SRC_H / 2 - 3, 0, Math.PI * 2); g.stroke();
+  })();
+  // stageview: one long strip (true-ish aspect, but tall enough to read)
+  (function () {
+    const W = 430, H = 60; const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    g.imageSmoothingQuality = 'high'; g.drawImage(strip, 6, 12, W - 12, H - 24);
+    g.strokeStyle = 'rgba(255,255,255,0.3)'; g.strokeRect(6.5, 12.5, W - 13, H - 25);
+    g.fillStyle = '#fff'; g.font = 'bold 15px sans-serif'; g.textAlign = 'center';
+    g.fillText('10400 × 416  ·  50 × 2 m', W / 2, H - 2);
+    document.getElementById('stage').appendChild(c);
+  })();
+  // output: 3 rows on a 3840x2160 canvas
+  (function () {
+    const W = 430, H = Math.round(W * 2160 / 3840); const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    const s = W / 3840, rowH = Math.round(416 * s);
+    const parts = [[0, 3744], [3744, 7488], [7488, 10400]];
+    g.imageSmoothingQuality = 'high';
+    parts.forEach((p, i) => {
+      const y = Math.round(i * 416 * s), w = Math.round((p[1] - p[0]) * s);
+      g.drawImage(strip, p[0] / K, 0, (p[1] - p[0]) / K, SRC_H, 0, y, w, rowH);
+      g.strokeStyle = 'rgba(255,255,255,0.3)'; g.strokeRect(0.5, y + 0.5, w - 1, rowH - 1);
+    });
+    document.getElementById('output').appendChild(c);
+  })();
+</script>
+</body>
+</html>

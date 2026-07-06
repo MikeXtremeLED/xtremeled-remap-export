@@ -17,6 +17,13 @@
 
 ![Stageview content → XtremeLED Remap Export → output mapped](docs/hero.png)
 
+<p align="center">
+  <a href="https://youtu.be/PxZIOUa16SI">
+    <img src="docs/youtube-thumbnail.png" width="640" alt="Watch the walkthrough on YouTube" /><br>
+    ▶️ <b>Watch the 90-second walkthrough on YouTube</b>
+  </a>
+</p>
+
 ---
 
 ## What does it actually do?

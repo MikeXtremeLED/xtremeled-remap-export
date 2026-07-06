@@ -161,6 +161,7 @@ function makePoster() {
     page = m[1];
     spec = m[2];
     if (page === 'explainer') { width = 1200; height = 1500; }
+    if (page === 'thumbnail') { width = 1280; height = 720; }
   }
   const outPng = spec;
   const w = new BrowserWindow({

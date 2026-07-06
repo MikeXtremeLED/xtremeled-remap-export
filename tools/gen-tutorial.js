@@ -21,41 +21,89 @@ for (const [k, f] of Object.entries(imgs)) {
   embedded[k] = 'data:image/png;base64,' + fs.readFileSync(path.join(shotsDir, f)).toString('base64');
 }
 
-// focus: [centerX, centerY, width] in image pixels (3200x1944). height derived 16:9.
-// hl: [x,y,w,h] highlight box in image pixels. title / caption strings.
-const F_FULL = [1600, 972, 3200];
+// Measured panel rects from the shoot (physical px, exactly matching the screenshots)
+const rectsAll = JSON.parse(fs.readFileSync(path.join(shotsDir, 'shots.json'), 'utf8'));
+
+// Image dimensions (from the first screenshot)
+const IMG_W = 3200;
+const IMG_H = 1944;
+const F_FULL = [IMG_W / 2, IMG_H / 2, IMG_W];
+
+// Build focus + highlight from a measured rect.
+// opts: extraW (zoom margin factor), minW (min view width), lift (0..1, raises the
+// element in frame so the bottom caption bar doesn't cover it)
+function sceneFor(rect, opts = {}) {
+  if (!rect) throw new Error('missing rect for scene');
+  const pad = opts.pad != null ? opts.pad : 26;
+  const r = { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2 * pad, h: rect.h + 2 * pad };
+  const extraW = opts.extraW || 1.9;
+  const minW = opts.minW || 1500;
+  // view must fit the rect in both dimensions, leaving room for the caption bar (~26% height)
+  const usableH = 0.72;
+  let viewW = Math.max(r.w * extraW, minW, (r.h / usableH + 80) * (1920 / 1080));
+  viewW = Math.min(viewW, IMG_W);
+  const viewH = (viewW * 1080) / 1920;
+  const lift = opts.lift != null ? opts.lift : 0.08;
+  let cx = r.x + r.w / 2;
+  let cy = r.y + r.h / 2 + viewH * lift;
+  cx = Math.max(viewW / 2, Math.min(IMG_W - viewW / 2, cx));
+  cy = Math.max(viewH / 2, Math.min(IMG_H - viewH / 2, cy));
+  return { focus: [cx, cy, viewW], hl: [r.x, r.y, r.w, r.h] };
+}
+
+const RE = rectsAll.editor;
+const RES = rectsAll.editorSlice;
+const RX = rectsAll.export;
+const RXC = rectsAll.exportCodec;
+
+// ~40% shorter cut (target ≈ 85 s). Each scene carries a short voice line (vo).
 const SCENES = [
-  { dur: 6.5, card: 'intro' },
-  { dur: 8.5, img: 'E', focus: F_FULL, title: '1 · THE MAPPING PAGE',
-    caption: 'Build your input-to-output mapping — the same slice principle as Resolume Advanced Output.' },
-  { dur: 9, img: 'E', focus: [2820, 440, 1550], hl: [2530, 150, 660, 560], title: 'INPUT & OUTPUT SIZE',
-    caption: 'Set your stageview canvas resolution, and add one or more output screens.' },
-  { dur: 9, img: 'E', focus: [950, 640, 2100], hl: [8, 150, 452, 360], title: 'SLICES',
-    caption: 'Each slice samples a region of the input and places it on the output screen.' },
-  { dur: 9.5, img: 'ES', focus: [2820, 900, 1450], hl: [2530, 560, 660, 900], title: 'ROTATION · FLIP · MASKS',
-    caption: 'Per slice: input & output rectangles, 90° rotation, flip, and key-point input masks.' },
-  { dur: 9, img: 'E', focus: [1850, 300, 1900], hl: [1628, 22, 474, 78], title: 'RESOLUME XML',
-    caption: 'Import a Resolume Advanced Output XML directly — or export your mapping back to XML.' },
-  { dur: 9, img: 'EO', focus: F_FULL, title: 'OUTPUT MAP',
-    caption: 'Switch to Output Map to preview exactly how your content lands on each screen.' },
+  { dur: 6, card: 'intro',
+    vo: 'Turn stageview content into ready-to-play LED output.' },
+  { dur: 5, img: 'E', focus: F_FULL, title: '1 · THE MAPPING PAGE',
+    caption: 'Build your input-to-output mapping — the Resolume slice principle.',
+    vo: 'On the Mapping page you build your input-to-output mapping.' },
+  { dur: 5.5, img: 'E', ...sceneFor(RE.project), title: 'INPUT & OUTPUT SIZE',
+    caption: 'Set your stageview canvas resolution, and add output screens.',
+    vo: 'Set your stageview resolution, and add one or more output screens.' },
+  { dur: 5.5, img: 'E', ...sceneFor(RE.slices, { extraW: 2.4 }), title: 'SLICES',
+    caption: 'Each slice samples the input and places it on the output.',
+    vo: 'Each slice takes a region of the input and places it on the output.' },
+  { dur: 5.5, img: 'ES', ...sceneFor(RES.sliceProps), title: 'ROTATION · FLIP · MASKS',
+    caption: 'Rotation, flip, and key-point input masks per slice.',
+    vo: 'Every slice supports rotation, flip, and input masks.' },
+  { dur: 5, img: 'E', ...sceneFor(RE.xmlButtons, { extraW: 3.2, minW: 1700 }), title: 'RESOLUME XML',
+    caption: 'Import — or export — a Resolume Advanced Output XML.',
+    vo: 'Import your Resolume XML directly, or export it back out.' },
+  { dur: 5, img: 'EO', focus: F_FULL, title: 'OUTPUT MAP',
+    caption: 'Preview exactly how your content lands on each screen.',
+    vo: 'The Output Map shows how your content lands on each screen.' },
 
-  { dur: 3.5, card: 'part2' },
-  { dur: 9, img: 'X', focus: [1000, 640, 2100], hl: [8, 108, 452, 210], title: '2 · ADD FOOTAGE',
-    caption: 'On the Export page, add your stageview footage — images or video.' },
-  { dur: 9, img: 'X', focus: [1350, 1010, 2300], hl: [440, 900, 1660, 320], title: 'LIVE PREVIEW',
-    caption: 'See it live on the input map, with slice outlines and masks drawn on top.' },
-  { dur: 10, img: 'X', focus: [2820, 560, 1520], hl: [2530, 150, 660, 820], title: 'PER-CLIP ADJUST',
-    caption: 'Fit, position, linked or per-axis scale, rotation and full colour control — all live.' },
-  { dur: 9.5, img: 'X', focus: [1250, 1780, 2500], hl: [430, 1760, 1420, 96], title: 'TRIM',
-    caption: 'Trim with draggable in / out points and an audio waveform — or type exact times.' },
-  { dur: 10, img: 'XC', focus: [2820, 1330, 1520], hl: [2530, 1180, 660, 300], title: 'CODECS',
-    caption: 'Export to DXV3, HAP, ProRes, ProRes 4444, HEVC, H.264, PNG or WAV.' },
-  { dur: 9.5, img: 'XC', focus: [2820, 1480, 1520], hl: [2530, 1330, 660, 380], title: 'ALPHA · DEPTH · GPU',
-    caption: 'Set alpha, bit depth and GPU acceleration — or match the source in one click.' },
-  { dur: 9, img: 'XO', focus: F_FULL, title: 'OUTPUT CHECK',
-    caption: 'Check the Output view, choose a destination folder, and hit Start export.' },
+  { dur: 2.5, card: 'part2', vo: 'Now, exporting.' },
+  { dur: 5, img: 'X', ...sceneFor(RX.footage, { extraW: 2.4 }), title: '2 · ADD FOOTAGE',
+    caption: 'Add your stageview footage — images or video.',
+    vo: 'On the Export page, add your footage — images or video.' },
+  { dur: 5, img: 'X', ...sceneFor(RX.previewCanvas, { extraW: 1.5, pad: 40 }), title: 'LIVE PREVIEW',
+    caption: 'See it live on the input map, with slices and masks.',
+    vo: 'You instantly see it on the input map, with slices and masks.' },
+  { dur: 5.5, img: 'X', ...sceneFor(RX.clip), title: 'PER-CLIP ADJUST',
+    caption: 'Fit, scale, rotation and colour — live, per clip.',
+    vo: 'Adjust fit, scale, rotation and colour, live, per clip.' },
+  { dur: 5, img: 'X', ...sceneFor(RX.timeline, { extraW: 1.5, lift: 0.24 }), title: 'TRIM',
+    caption: 'Trim with in / out points and an audio waveform.',
+    vo: 'Trim with in and out points and an audio waveform.' },
+  { dur: 5.5, img: 'XC', ...sceneFor(RXC.codecRow, { extraW: 2.6, minW: 1600 }), title: 'CODECS',
+    caption: 'DXV3, HAP, ProRes, HEVC, H.264, PNG or WAV.',
+    vo: 'Pick your codec — DXV3, HAP, ProRes or HEVC.' },
+  { dur: 5, img: 'XC', ...sceneFor(RXC.alphaGpu, { extraW: 2.2 }), title: 'ALPHA · DEPTH · GPU',
+    caption: 'Alpha, bit depth, GPU — or match the source in one click.',
+    vo: 'Set alpha, bit depth and GPU, or match the source in one click.' },
+  { dur: 5, img: 'XO', focus: F_FULL, title: 'OUTPUT CHECK',
+    caption: 'Check the output, choose a folder, and start export.',
+    vo: 'Check the output, choose a folder, and start the export.' },
 
-  { dur: 11, card: 'outro' },
+  { dur: 7, card: 'outro',
+    vo: 'Play it on any device. Free and open source — download it on GitHub.' },
 ];
 
 // precompute same-as-prev/next by "img or card id"
@@ -216,4 +264,14 @@ if(!location.search.includes('capture')){let st=null;function loop(ts){if(st===n
 </script></body></html>`;
 
 fs.writeFileSync(out, html);
-console.log('tutorial-build.html written,', SCENES.length, 'scenes,', Math.round(SCENES.reduce((a, s) => a + s.dur, 0)), 's');
+
+// Voice-over manifest: cumulative start time + text per scene (for tools/make-vo.js)
+let acc = 0;
+const vo = [];
+for (const s of SCENES) {
+  if (s.vo) vo.push({ start: Math.round((acc + 0.35) * 100) / 100, text: s.vo, sceneEnd: acc + s.dur });
+  acc += s.dur;
+}
+fs.writeFileSync(path.join(__dirname, 'vo-manifest.json'), JSON.stringify(vo, null, 2));
+
+console.log('tutorial-build.html written,', SCENES.length, 'scenes,', Math.round(SCENES.reduce((a, s) => a + s.dur, 0)), 's; vo lines:', vo.length);
