@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.paypal.com/donate/?business=Moonmikejack%40hotmail.com&no_recurring=0&item_name=Support+XtremeLED+Remap+Export&currency_code=EUR">
+  <a href="https://paypal.me/MFoppen">
     <img src="https://img.shields.io/badge/☕_Buy_me_a_coffee-PayPal-FFDD00?style=for-the-badge&logo=paypal&logoColor=00457C" alt="Buy me a coffee via PayPal" />
   </a>
 </p>
@@ -163,7 +163,7 @@ npx electron-builder --win --x64
 
 XtremeLED Remap Export is free and open source, built in spare time for the LED community.
 If it saved you a media server rental (or just some stress on a show), you can
-[**buy me a coffee via PayPal**](https://www.paypal.com/donate/?business=Moonmikejack%40hotmail.com&no_recurring=0&item_name=Support+XtremeLED+Remap+Export&currency_code=EUR) — much appreciated! 🧡
+[**buy me a coffee via PayPal**](https://paypal.me/MFoppen) — much appreciated! 🧡
 
 ## Credits
 
