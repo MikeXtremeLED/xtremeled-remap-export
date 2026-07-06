@@ -1,11 +1,49 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const renderMod = require('./src/main/render');
 
 app.setName('XtremeLED Remap Export');
+
+// Application menu with standard Edit roles. On Windows/Linux there is NO default
+// menu, so without this the Cut/Copy/Paste/Undo/Select-All keyboard shortcuts don't
+// work in text and number fields — making it look like you can't edit values.
+function buildMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    { role: 'fileMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac ? [{ role: 'pasteAndMatchStyle' }] : []),
+        { role: 'delete' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+        { role: 'toggleDevTools' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 let win = null;
 const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
@@ -279,6 +317,7 @@ app.whenReady().then(() => {
   if (makeVideoArg) return makeVideo();
   if (shootArg) return shootTutorial();
   if (makeTutArg) return makeTut();
+  buildMenu();
   const iconPng = path.join(__dirname, 'build/icon.png');
   if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
     try {

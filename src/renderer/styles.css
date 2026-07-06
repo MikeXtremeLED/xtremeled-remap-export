@@ -21,7 +21,14 @@ html, body {
   color: var(--text);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden;
+  -webkit-user-select: none;
   user-select: none;
+}
+
+/* Form fields must always be selectable/editable (esp. on Windows) */
+input, textarea, select {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 button {
