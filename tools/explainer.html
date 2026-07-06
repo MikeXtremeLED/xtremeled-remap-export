@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 1200px; height: 1500px; background: #0e1113; overflow: hidden;
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+  #wrap { width: 1200px; height: 1500px; box-sizing: border-box; padding: 42px 60px;
+    background: radial-gradient(110% 60% at 50% 0%, #1b2126 0%, #0e1113 55%);
+    display: flex; flex-direction: column; align-items: center; }
+
+  .card { background: #06080a; border: 1px solid #33383c; border-radius: 16px; padding: 18px 20px 16px; }
+  .card .head { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 12px; }
+  .card h3 { margin: 0; color: #9aa0a5; font-size: 24px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; }
+  .card h3 b { color: #ffffff; }
+  .chip { background: #f7941e; color: #241503; font-weight: 900; font-size: 20px; letter-spacing: 2px;
+    border-radius: 8px; padding: 5px 16px; }
+  .card .sub { text-align: center; color: #6d7276; font-size: 18px; margin-top: 12px; }
+  .card .sub b { color: #9aa0a5; }
+  canvas { display: block; }
+
+  #mid { display: flex; flex-direction: column; align-items: center; margin: 6px 0; }
+  .arrow { color: #f7941e; font-size: 54px; font-weight: 900; line-height: 0.9; }
+  #mid .row { display: flex; align-items: center; gap: 26px; margin: 6px 0; }
+  #mid img { width: 150px; height: 150px; }
+  #mid .txt { max-width: 560px; color: #eef1f3; font-size: 30px; line-height: 1.35; font-weight: 700; }
+  #mid .txt b { color: #f7941e; }
+  #mid .name { color: #8b9195; font-size: 20px; font-weight: 700; letter-spacing: 1.5px; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <!-- TOP: stageview = one long 50x2m strip -->
+  <div class="card">
+    <div class="head"><h3>Stageview <b>mapping — 10400 × 416 px</b></h3><span class="chip">VIDEO</span></div>
+    <div id="stage"></div>
+    <div class="sub">One continuous <b>50 × 2 m P4.81</b> LED screen — your content rendered as one long strip</div>
+  </div>
+
+  <!-- MIDDLE: icon + text -->
+  <div id="mid">
+    <div class="arrow">⬇</div>
+    <div class="row">
+      <img src="../build/icon.png" />
+      <div>
+        <div class="txt">Encoding from <b>stageview video</b> into the <b>output video</b></div>
+        <div class="name">XTREMELED REMAP EXPORT</div>
+      </div>
+    </div>
+    <div class="arrow">⬇</div>
+  </div>
+
+  <!-- BOTTOM: real output — 3 rows on 3840x2160 -->
+  <div class="card">
+    <div class="head"><h3>Remap export <b>output — 3840 × 2160 px</b></h3><span class="chip">VIDEO</span></div>
+    <div id="output"></div>
+    <div class="sub">The same strip, cut into <b>3 rows</b> that fit one 3840 × 2160 output — ready to play on any device</div>
+  </div>
+</div>
+
+<script>
+  // ---- the source strip: 10400x416 world, drawn at 1/4 res (2600x104 px) ----
+  // purple checker + white diagonals + centre circle, exactly like the app's test card
+  const SRC_W = 2600, SRC_H = 104, K = 4; // world px = src px * K
+  const strip = document.createElement('canvas');
+  strip.width = SRC_W; strip.height = SRC_H;
+  (function () {
+    const g = strip.getContext('2d');
+    const cell = 26; // = 104 world px cells
+    for (let y = 0, j = 0; y < SRC_H; y += cell, j++)
+      for (let x = 0, i = 0; x < SRC_W; x += cell, i++) {
+        g.fillStyle = (i + j) % 2 ? '#6f1c94' : '#9c27b0';
+        g.fillRect(x, y, cell, cell);
+      }
+    g.strokeStyle = 'rgba(255,255,255,0.8)';
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(SRC_W, SRC_H); g.moveTo(SRC_W, 0); g.lineTo(0, SRC_H); g.stroke();
+    g.beginPath(); g.arc(SRC_W / 2, SRC_H / 2, SRC_H / 2 - 3, 0, Math.PI * 2); g.stroke();
+  })();
+
+  function pill(g, label, sub, cx, cy, fs) {
+    g.font = 'bold ' + fs + 'px -apple-system,sans-serif';
+    const tw = g.measureText(label).width;
+    g.fillStyle = 'rgba(6,8,10,0.85)';
+    g.fillRect(cx - tw / 2 - fs * 0.5, cy - fs * 0.95, tw + fs, fs * 1.3);
+    g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(label, cx, cy - fs * 0.28);
+    const sf = fs * 0.62;
+    g.font = 'bold ' + sf + 'px -apple-system,sans-serif';
+    const sw = g.measureText(sub).width;
+    g.fillStyle = 'rgba(6,8,10,0.85)';
+    g.fillRect(cx - sw / 2 - sf * 0.5, cy + fs * 0.38, sw + sf, sf * 1.3);
+    g.fillStyle = '#f7941e';
+    g.fillText(sub, cx, cy + fs * 0.38 + sf * 0.66);
+  }
+
+  // dimension line helper (technical-drawing style)
+  function dimH(g, x0, x1, y, text) {
+    g.strokeStyle = '#8b9195'; g.fillStyle = '#c9cdd0'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
+    for (const x of [x0, x1]) { g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x, y + 7); g.stroke(); }
+    g.font = 'bold 21px -apple-system,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'bottom';
+    const tw = g.measureText(text).width;
+    g.fillStyle = '#06080a'; g.fillRect((x0 + x1) / 2 - tw / 2 - 10, y - 30, tw + 20, 26);
+    g.fillStyle = '#c9cdd0'; g.fillText(text, (x0 + x1) / 2, y - 5);
+  }
+
+  // ---- TOP: stageview strip at true 25:1 aspect with dimensions ----
+  (function () {
+    const W = 1020, H = 150;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    const sw = W - 70, sh = Math.round(sw * 416 / 10400); // true aspect: ≈ 38 px
+    const sx = 10, sy = 72;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(strip, sx, sy, sw, sh);
+    g.strokeStyle = 'rgba(255,255,255,0.35)'; g.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
+    // dimensions
+    dimH(g, sx, sx + sw, sy - 26, '10400 px  (50 m)');
+    // vertical dim right
+    g.strokeStyle = '#8b9195'; g.lineWidth = 1.5;
+    const dx = sx + sw + 26;
+    g.beginPath(); g.moveTo(dx, sy); g.lineTo(dx, sy + sh); g.stroke();
+    for (const y of [sy, sy + sh]) { g.beginPath(); g.moveTo(dx - 7, y); g.lineTo(dx + 7, y); g.stroke(); }
+    g.font = 'bold 17px -apple-system,sans-serif'; g.fillStyle = '#c9cdd0';
+    g.textAlign = 'left'; g.textBaseline = 'middle';
+    g.save(); g.translate(dx + 12, sy + sh / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('416 px', 0, 0); g.restore();
+    // name under the strip
+    g.font = 'bold 22px -apple-system,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'top';
+    g.fillStyle = '#ffffff';
+    g.fillText('50X2M P4.81 — one piece, 25:1', sx + sw / 2, sy + sh + 12);
+    document.getElementById('stage').appendChild(c);
+  })();
+
+  // ---- BOTTOM: the real output — rows are true crops of the same strip ----
+  (function () {
+    const W = 1020, H = Math.round(W * 2160 / 3840); // 574 = true 16:9
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,0.18)'; g.strokeRect(0.5, 0.5, W - 1, H - 1);
+    const s = W / 3840;            // canvas px per output px
+    const rowH = Math.round(416 * s);
+    const parts = [
+      { x0: 0,    x1: 3744,  label: 'PART 1/3', sub: '3744×416' },
+      { x0: 3744, x1: 7488,  label: 'PART 2/3', sub: '3744×416' },
+      { x0: 7488, x1: 10400, label: 'PART 3/3', sub: '2912×416' },
+    ];
+    g.imageSmoothingQuality = 'high';
+    parts.forEach((p, i) => {
+      const y = Math.round(i * 416 * s);
+      const w = Math.round((p.x1 - p.x0) * s);
+      // crop the SAME strip source — exactly what the software does
+      g.drawImage(strip, p.x0 / K, 0, (p.x1 - p.x0) / K, SRC_H, 0, y, w, rowH);
+      g.strokeStyle = 'rgba(255,255,255,0.3)';
+      g.strokeRect(0.5, y + 0.5, w - 1, rowH - 1);
+      pill(g, '50X2M P4.81', p.label + ' · ' + p.sub, w / 2, y + rowH / 2, 19);
+    });
+    document.getElementById('output').appendChild(c);
+  })();
+</script>
+</body>
+</html>

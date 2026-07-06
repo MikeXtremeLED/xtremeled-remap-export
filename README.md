@@ -19,6 +19,18 @@
 
 ---
 
+## What does it actually do?
+
+Your LED screen is designed as one big **stageview** canvas (here: a 50 × 2 m P4.81 wall = 10400 × 416 px).
+But a normal output only does 3840 × 2160. XtremeLED Remap Export **cuts that one long strip into rows
+that fit the output** — encoding your stageview video straight into a ready-to-play output video.
+
+<p align="center">
+  <img src="docs/what-it-does.png" width="560" alt="Stageview 10400×416 encoded into a 3840×2160 output" />
+</p>
+
+---
+
 ## Why this exists
 
 On a show you don't always have the luxury of a full media-server setup. Sometimes the machine

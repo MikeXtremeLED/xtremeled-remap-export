@@ -78,13 +78,16 @@ function shootTutorial() {
       if (await js('window.__demoReady === true')) break;
       await wait(50);
     }
+    const rects = {};
     await wait(600);
     await js('window.__demoApi.viewInput()');
     await wait(400);
     await shot('editor-input');
+    rects.editor = await js('window.__demoApi.rects()');
     await js('window.__demoApi.selectSlice(1)');
     await wait(400);
     await shot('editor-slice');
+    rects.editorSlice = await js('window.__demoApi.rects()');
     await js('window.__demoApi.viewOutput()');
     await wait(500);
     await shot('editor-output');
@@ -99,12 +102,15 @@ function shootTutorial() {
     await js('window.__demoApi.rpInput()');
     await wait(400);
     await shot('export-input');
+    rects.export = await js('window.__demoApi.rects()');
     await js("window.__demoApi.setCodec('dxv')");
     await wait(300);
     await shot('export-codec');
+    rects.exportCodec = await js('window.__demoApi.rects()');
     await js('window.__demoApi.rpOutput()');
     await wait(500);
     await shot('export-output');
+    fs.writeFileSync(path.join(outDir, 'shots.json'), JSON.stringify(rects, null, 2));
     console.log('SHOOT_DONE');
     app.quit();
   });
@@ -145,18 +151,27 @@ function makeVideo() {
   });
 }
 
-// Capture tools/poster.html (Facebook poster) at 1080x1350
+// Capture a static tools/<page>.html at a fixed size:
+// --makeposter=out.png (poster.html 1080x1350) or --makeposter=explainer:out.png (explainer.html 1200x1500)
 function makePoster() {
-  const outPng = makePosterArg.slice('--makeposter='.length);
+  let spec = makePosterArg.slice('--makeposter='.length);
+  let page = 'poster', width = 1080, height = 1350;
+  const m = spec.match(/^(\w+):(.+)$/);
+  if (m) {
+    page = m[1];
+    spec = m[2];
+    if (page === 'explainer') { width = 1200; height = 1500; }
+  }
+  const outPng = spec;
   const w = new BrowserWindow({
-    width: 1080, height: 1350, show: false, frame: false,
+    width, height, show: false, frame: false,
     webPreferences: { offscreen: true },
   });
-  w.loadFile(path.join(__dirname, 'tools/poster.html'));
+  w.loadFile(path.join(__dirname, `tools/${page}.html`));
   w.webContents.once('did-finish-load', () => {
     setTimeout(async () => {
       try {
-        const img = await w.webContents.capturePage({ x: 0, y: 0, width: 1080, height: 1350 });
+        const img = await w.webContents.capturePage({ x: 0, y: 0, width, height });
         fs.writeFileSync(outPng, img.toPNG());
         console.log('Poster saved:', outPng);
       } catch (e) {
