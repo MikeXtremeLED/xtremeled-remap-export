@@ -47,6 +47,16 @@
     <!-- ======================= EDITOR PAGE ======================= -->
     <div id="editor-page">
       <aside id="left">
+        <div class="section" id="project-section">
+          <div class="panel-title">Project</div>
+          <div class="row"><label>Name</label><input type="text" id="p-name" /></div>
+          <div class="subtitle">Input canvas (stageview)</div>
+          <div class="row2">
+            <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
+            <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
+          </div>
+        </div>
+
         <div id="left-head">
           <button id="btn-add-menu" title="Add a screen or slice">＋ ▾</button>
           <span class="panel-title">Screens</span>
@@ -61,37 +71,6 @@
           <button id="btn-split-slice">Split rows…</button>
           <button id="btn-del-slice" class="danger">Delete</button>
         </div>
-      </aside>
-
-      <div id="center">
-        <canvas id="editor"></canvas>
-        <div id="statusbar">
-          <span id="status-pos"></span>
-          <span id="status-hint">Drag = move · Handles = resize · Scroll = pan · ⌘/Ctrl+scroll = zoom · ⌘Z undo</span>
-        </div>
-      </div>
-
-      <aside id="right">
-        <div class="section">
-          <div class="panel-title">Project</div>
-          <div class="row"><label>Name</label><input type="text" id="p-name" /></div>
-          <div class="subtitle">Input canvas (stageview)</div>
-          <div class="row2">
-            <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
-            <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
-          </div>
-        </div>
-
-        <div class="section hidden" id="screen-props">
-          <div class="panel-title">Screen</div>
-          <div class="row"><label>Name</label><input type="text" id="scr-name" /></div>
-          <div class="subtitle">Output resolution</div>
-          <div class="row2">
-            <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
-            <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
-          </div>
-          <div class="row"><span id="scr-info" class="dim"></span></div>
-        </div>
 
         <div class="section">
           <div class="panel-title">Reference — <span id="ref-view-label">Input</span></div>
@@ -104,6 +83,36 @@
             <label>Opacity</label>
             <input type="range" id="ref-opacity" min="0" max="100" value="60" data-default="60" />
           </div>
+        </div>
+
+        <div class="section" id="tp-section">
+          <div class="panel-title">Test pattern</div>
+          <div class="row">
+            <button id="tp-preview">Set as reference</button>
+            <button id="tp-save">Save PNG…</button>
+          </div>
+          <div class="row"><button id="tp-export">Send to Export page</button></div>
+        </div>
+      </aside>
+
+      <div id="center">
+        <canvas id="editor"></canvas>
+        <div id="statusbar">
+          <span id="status-pos"></span>
+          <span id="status-hint">Drag = move · Handles = resize · Scroll = pan · ⌘/Ctrl+scroll = zoom · ⌘Z undo</span>
+        </div>
+      </div>
+
+      <aside id="right">
+        <div class="section hidden" id="screen-props">
+          <div class="panel-title">Screen</div>
+          <div class="row"><label>Name</label><input type="text" id="scr-name" /></div>
+          <div class="subtitle">Output resolution</div>
+          <div class="row2">
+            <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
+            <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
+          </div>
+          <div class="row"><span id="scr-info" class="dim"></span></div>
         </div>
 
         <div class="section" id="slice-props">
@@ -163,16 +172,6 @@
           </div>
           <div class="note">In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it.</div>
           <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
-        </div>
-
-        <div class="section">
-          <div class="panel-title">Test pattern</div>
-          <div class="note">Generate a test card at input canvas size with grid, circles and slice labels — to verify the mapping on the real LED screen.</div>
-          <div class="row">
-            <button id="tp-preview">Set as reference</button>
-            <button id="tp-save">Save PNG…</button>
-          </div>
-          <div class="row"><button id="tp-export">Send to Export page</button></div>
         </div>
 
         <div class="section">

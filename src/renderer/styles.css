@@ -108,12 +108,15 @@ select { width: auto; }
 #editor-page, #render-page { display: flex; flex: 1; min-width: 0; }
 
 #left, #rp-left {
-  width: 230px;
+  width: 258px;
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
 }
+#left .section { padding: 10px 12px; }
+#left .section .panel-title { padding: 4px 0 6px; }
+#screen-tree { min-height: 100px; }
 #slice-list, #rp-files, #screen-tree { flex: 1; overflow-y: auto; }
 
 /* Resolume-style screen tree (left panel) */

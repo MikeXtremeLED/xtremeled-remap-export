@@ -3137,7 +3137,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         const q = (sel) => document.querySelector(sel);
         const out = { page };
         if (page === 'editor') {
-          out.project = R(q('#right .section'));
+          out.project = R(q('#project-section'));
           const items = [...document.querySelectorAll('#screen-tree .slice-item')];
           out.slices = union(R(q('#left .panel-title')), ...items.map(R));
           out.sliceProps = R(q('#slice-props'));
