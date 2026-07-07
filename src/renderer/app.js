@@ -1947,15 +1947,35 @@ function updatePlayBtn() {
   btn.disabled = !f || f.isImage || !fileDuration(f);
 }
 
+// Codecs Chromium can actually decode in a <video> element. Everything else
+// (ProRes, DXV, HAP, MJPEG, ...) is played by stepping ffmpeg-extracted frames —
+// loading those into <video> gives a black picture or crashes the media stack.
+const BROWSER_CODECS = new Set(['h264', 'avc1', 'hevc', 'hvc1', 'vp8', 'vp9', 'av1', 'theora']);
+function isBrowserPlayable(f) {
+  const vc = f && f.probe && f.probe.videoCodec ? f.probe.videoCodec.toLowerCase() : '';
+  return BROWSER_CODECS.has(vc);
+}
+
 function loadNativeVideo(p) {
   return new Promise((resolve, reject) => {
-    const onOk = () => { cleanup(); resolve(); };
-    const onErr = () => { cleanup(); reject(new Error('codec not supported by preview player')); };
-    const cleanup = () => {
-      rpVideo.removeEventListener('canplay', onOk);
-      rpVideo.removeEventListener('error', onErr);
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      // even after canplay, an undecodable track reports videoWidth 0
+      if (ok && rpVideo.videoWidth > 0) resolve();
+      else reject(new Error('codec not supported by preview player'));
     };
-    rpVideo.addEventListener('canplay', onOk);
+    const onOk = () => finish(true);
+    const onErr = () => finish(false);
+    const cleanup = () => {
+      rpVideo.removeEventListener('loadeddata', onOk);
+      rpVideo.removeEventListener('error', onErr);
+      clearTimeout(to);
+    };
+    const to = setTimeout(() => finish(false), 4000);
+    rpVideo.addEventListener('loadeddata', onOk);
     rpVideo.addEventListener('error', onErr);
     api.pathToFileUrl(p).then((url) => {
       rpVideo.src = url;
@@ -1974,12 +1994,18 @@ async function startPlayback() {
   let startT = f.curTime || inP;
   if (startT >= outP - 0.05 || startT < inP) startT = inP;
 
-  if (videoOkForPath !== f.path) {
-    try {
-      await loadNativeVideo(f.path);
-      videoOkForPath = f.path;
-    } catch (e) {
-      videoOkForPath = 'FAIL:' + f.path;
+  // decide native vs ffmpeg-fallback from the probed codec (reliable) — only *try*
+  // the <video> element for codecs Chromium can decode.
+  if (videoOkForPath !== f.path && videoOkForPath !== 'FAIL:' + f.path) {
+    if (isBrowserPlayable(f)) {
+      try {
+        await loadNativeVideo(f.path);
+        videoOkForPath = f.path;
+      } catch (e) {
+        videoOkForPath = 'FAIL:' + f.path;
+      }
+    } else {
+      videoOkForPath = 'FAIL:' + f.path; // ProRes / DXV / HAP → ffmpeg frames
     }
   }
   rp.playing = true;
