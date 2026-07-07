@@ -152,6 +152,27 @@ select { width: auto; }
   padding: 9px 14px;
 }
 #add-popup button:hover { background: var(--accent-dim); }
+/* canvas right-click context menu */
+#ctx-menu {
+  position: fixed;
+  z-index: 200;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  min-width: 190px;
+  overflow: hidden;
+}
+#ctx-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 9px 14px;
+}
+#ctx-menu button:hover { background: var(--accent-dim); }
 .screen-row {
   display: flex;
   align-items: center;
@@ -243,9 +264,19 @@ select { width: auto; }
 .subtitle { color: var(--dim); font-size: 11px; margin: 10px 0 4px; }
 .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .row label { min-width: 44px; color: var(--dim); }
-.row2, .row4 { display: flex; align-items: center; gap: 5px; margin: 6px 0; flex-wrap: wrap; }
-.row2 label, .row4 label { color: var(--dim); width: 14px; text-align: right; }
+.row2 { display: flex; align-items: center; gap: 5px; margin: 6px 0; flex-wrap: wrap; }
+.row2 label { color: var(--dim); width: 14px; text-align: right; }
 .row2 .num { width: 72px; }
+/* X/Y/W/H fields as a tidy 2x2 grid */
+.row4 {
+  display: grid;
+  grid-template-columns: 16px 1fr 16px 1fr;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0;
+}
+.row4 label { color: var(--dim); text-align: right; }
+.row4 input.num { width: 100%; }
 .slider-row label { min-width: 62px; }
 .slider-row .num { width: 54px; }
 .slider-row .val { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }

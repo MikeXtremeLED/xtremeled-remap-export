@@ -611,6 +611,11 @@ function sliceAt(px, py) {
   return null;
 }
 
+function hideCtxMenu() {
+  const m = $('ctx-menu');
+  if (m) m.classList.add('hidden');
+}
+
 // ---------------- snapping ----------------
 function snapDelta(r, v) {
   const t = vt[v];
@@ -636,6 +641,36 @@ function snapDelta(r, v) {
     }
   }
   return { dx: dx || 0, dy: dy || 0 };
+}
+
+// Snap the edges being dragged during a resize to canvas borders and other slices' edges
+function snapResize(r, k, v) {
+  const t = vt[v];
+  const thr = 6 / t.scale;
+  const { w: W, h: H } = worldSize(v);
+  const xE = [0, W];
+  const yE = [0, H];
+  for (const o of visibleSlices(v)) {
+    if (o.id === selId) continue;
+    const or = sliceRect(o, v);
+    xE.push(or.x, or.x + or.w);
+    yE.push(or.y, or.y + or.h);
+  }
+  const snapVal = (val, edges) => {
+    let best = null;
+    for (const e of edges) {
+      const d = e - val;
+      if (Math.abs(d) <= thr && (best === null || Math.abs(d) < Math.abs(best))) best = d;
+    }
+    return best;
+  };
+  if (k.includes('w')) { const d = snapVal(r.x, xE); if (d !== null) { r.x += d; r.w -= d; } }
+  if (k.includes('e')) { const d = snapVal(r.x + r.w, xE); if (d !== null) r.w += d; }
+  if (k.includes('n')) { const d = snapVal(r.y, yE); if (d !== null) { r.y += d; r.h -= d; } }
+  if (k.includes('s')) { const d = snapVal(r.y + r.h, yE); if (d !== null) r.h += d; }
+  r.w = Math.max(1, r.w);
+  r.h = Math.max(1, r.h);
+  return r;
 }
 
 // ---------------- mouse (editor) ----------------
@@ -805,7 +840,7 @@ function onMouseMove(e) {
     r.x = Math.round(nr.x);
     r.y = Math.round(nr.y);
   } else if (drag.mode === 'resize') {
-    Object.assign(sliceRect(sel, view), applyResize(drag.orig, drag.k, dx, dy));
+    Object.assign(sliceRect(sel, view), snapResize(applyResize(drag.orig, drag.k, dx, dy), drag.k, view));
   }
   refreshProps();
   refreshSliceList();
@@ -1113,6 +1148,21 @@ function deleteSlice() {
   project.slices.splice(project.slices.indexOf(s), 1);
   selId = null;
   selScreenId = scrId; // fall back to selecting its screen
+  // last slice of this output gone? offer to remove the output as well
+  const scr = project.screens.find((x) => x.id === scrId);
+  const remaining = project.slices.filter((x) => sliceScreenId(x) === scrId).length;
+  if (
+    scr &&
+    remaining === 0 &&
+    project.screens.length > 1 &&
+    confirm(`Output "${scr.name}" has no slices left. Delete this output too?`)
+  ) {
+    project.screens.splice(project.screens.indexOf(scr), 1);
+    selScreenId = project.screens[0].id;
+    activeScreenId = selScreenId;
+    refreshScreenSelectors();
+    if (view === 'output') fitView('output');
+  }
   refreshSliceList();
   refreshProps();
   draw();
@@ -2641,6 +2691,14 @@ function bindUI() {
     const n = project.screens.length + 1;
     const sc = { id: 'scr' + Math.random().toString(36).slice(2, 7), name: 'Output #' + n, width: 1920, height: 1080 };
     project.screens.push(sc);
+    // a new output always starts with one slice (full input -> full output)
+    project.slices.push(newSliceDefaults({
+      id: uid(),
+      name: 'Slice 1',
+      screenId: sc.id,
+      in: { x: 0, y: 0, w: project.input.width, h: project.input.height },
+      out: { x: 0, y: 0, w: sc.width, h: sc.height },
+    }));
     selectScreen(sc.id);
     markDirty();
   };
@@ -2814,7 +2872,34 @@ function bindUI() {
   canvas.addEventListener('mousemove', (e) => { if (!drag) onMouseMove(e); });
   window.addEventListener('mouseup', onMouseUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // right-click a slice in the Output view -> context menu with "Match input rect"
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    hideCtxMenu();
+    if (page !== 'editor' || maskEditActive()) return;
+    const s = sliceAt(e.offsetX, e.offsetY);
+    if (!s || view !== 'output') return;
+    if (selId !== s.id) selectSlice(s.id);
+    const menu = $('ctx-menu');
+    menu.innerHTML = '';
+    const item = document.createElement('button');
+    item.textContent = 'Match input rect (size & position)';
+    item.onclick = () => {
+      pushHistory();
+      s.out = { x: s.in.x, y: s.in.y, w: s.in.w, h: s.in.h };
+      hideCtxMenu();
+      refreshProps();
+      refreshSliceList();
+      draw();
+      markDirty();
+    };
+    menu.appendChild(item);
+    menu.style.left = Math.min(e.clientX, window.innerWidth - 210) + 'px';
+    menu.style.top = Math.min(e.clientY, window.innerHeight - 50) + 'px';
+    menu.classList.remove('hidden');
+  });
+  window.addEventListener('click', hideCtxMenu);
+  window.addEventListener('blur', hideCtxMenu);
 
   document.addEventListener('contextmenu', (e) => {
     const t = e.target;
