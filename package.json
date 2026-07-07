@@ -1,7 +1,7 @@
 {
   "name": "xtremeled-remap-export",
   "productName": "XtremeLED Remap Export",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Remap stageview renders naar LED output mappings (Resolume-compatible)",
   "author": "XtremeLED",
   "license": "UNLICENSED",
