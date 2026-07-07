@@ -1,0 +1,82 @@
+[
+  {
+    "start": 0.35,
+    "text": "Turn stageview content into ready-to-play LED output.",
+    "sceneEnd": 6
+  },
+  {
+    "start": 6.35,
+    "text": "On the Mapping page you build your input-to-output mapping.",
+    "sceneEnd": 11
+  },
+  {
+    "start": 11.35,
+    "text": "Set your stageview resolution, and add one or more output screens.",
+    "sceneEnd": 16.5
+  },
+  {
+    "start": 16.85,
+    "text": "Each slice takes a region of the input and places it on the output.",
+    "sceneEnd": 22
+  },
+  {
+    "start": 22.35,
+    "text": "Every slice supports rotation, flip, and input masks.",
+    "sceneEnd": 27.5
+  },
+  {
+    "start": 27.85,
+    "text": "Import your Resolume XML directly, or export it back out.",
+    "sceneEnd": 32.5
+  },
+  {
+    "start": 32.85,
+    "text": "The Output Map shows how your content lands on each screen.",
+    "sceneEnd": 37.5
+  },
+  {
+    "start": 37.85,
+    "text": "Now, exporting.",
+    "sceneEnd": 40
+  },
+  {
+    "start": 40.35,
+    "text": "On the Export page, add your footage — images or video.",
+    "sceneEnd": 45
+  },
+  {
+    "start": 45.35,
+    "text": "You instantly see it on the input map, with slices and masks.",
+    "sceneEnd": 50
+  },
+  {
+    "start": 50.35,
+    "text": "Adjust fit, scale, rotation and colour, live, per clip.",
+    "sceneEnd": 55.5
+  },
+  {
+    "start": 55.85,
+    "text": "Trim with in and out points and an audio waveform.",
+    "sceneEnd": 60.5
+  },
+  {
+    "start": 60.85,
+    "text": "Pick your codec — DXV3, HAP, ProRes or HEVC.",
+    "sceneEnd": 66
+  },
+  {
+    "start": 66.35,
+    "text": "Set alpha, bit depth and GPU, or match the source in one click.",
+    "sceneEnd": 71
+  },
+  {
+    "start": 71.35,
+    "text": "Check the output, choose a folder, and start the export.",
+    "sceneEnd": 76
+  },
+  {
+    "start": 76.35,
+    "text": "Play it on any device. Free and open source — download it on GitHub.",
+    "sceneEnd": 83
+  }
+]

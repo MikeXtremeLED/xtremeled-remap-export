@@ -290,6 +290,8 @@ function createWindow() {
   const query = {};
   if (screenshotArg) query.demo = '1';
   if (pageArg) query.page = pageArg.slice('--page='.length);
+  const selArg = process.argv.find((a) => a.startsWith('--sel='));
+  if (selArg) query.sel = selArg.slice('--sel='.length);
   const loadOpts = Object.keys(query).length ? { query } : undefined;
   win.loadFile(path.join(__dirname, 'src/renderer/index.html'), loadOpts);
 

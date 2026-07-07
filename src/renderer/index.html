@@ -29,10 +29,9 @@
     </div>
     <div class="tb-sep"></div>
     <div class="tabs" id="view-tabs">
-      <button id="tab-input" class="tab active">Input Map</button>
-      <button id="tab-output" class="tab">Output Map</button>
+      <button id="tab-input" class="tab active">Input</button>
+      <button id="tab-output" class="tab">Output</button>
     </div>
-    <select id="screen-select" class="hidden" title="Active screen"></select>
     <div class="tb-group zoom">
       <button id="btn-zoom-out" title="Zoom out">−</button>
       <span id="zoom-label">100%</span>
@@ -48,10 +47,16 @@
     <!-- ======================= EDITOR PAGE ======================= -->
     <div id="editor-page">
       <aside id="left">
-        <div class="panel-title">Slices</div>
-        <div id="slice-list"></div>
+        <div id="left-head">
+          <button id="btn-add-menu" title="Add a screen or slice">＋ ▾</button>
+          <span class="panel-title">Screens</span>
+          <div id="add-popup" class="hidden">
+            <button id="add-screen-item">＋ Screen (output)</button>
+            <button id="add-slice-item">＋ Slice</button>
+          </div>
+        </div>
+        <div id="screen-tree"></div>
         <div class="left-buttons">
-          <button id="btn-add-slice">+ Slice</button>
           <button id="btn-dup-slice">Duplicate</button>
           <button id="btn-split-slice">Split rows…</button>
           <button id="btn-del-slice" class="danger">Delete</button>
@@ -75,17 +80,17 @@
             <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
             <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
           </div>
-          <div class="subtitle">Screens (outputs)</div>
-          <div class="row"><select id="p-screen-select" style="flex:1"></select></div>
-          <div class="row">
-            <button id="p-screen-add" style="flex:1">+ Add screen</button>
-            <button id="p-screen-del" class="danger" title="Delete selected screen">Delete</button>
-          </div>
+        </div>
+
+        <div class="section hidden" id="screen-props">
+          <div class="panel-title">Screen</div>
           <div class="row"><label>Name</label><input type="text" id="scr-name" /></div>
+          <div class="subtitle">Output resolution</div>
           <div class="row2">
             <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
             <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
           </div>
+          <div class="row"><span id="scr-info" class="dim"></span></div>
         </div>
 
         <div class="section">

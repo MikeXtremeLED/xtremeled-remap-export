@@ -8,7 +8,8 @@ const $ = (id) => document.getElementById(id);
 let project = null;
 let page = 'editor'; // 'editor' | 'render'
 let view = 'input'; // 'input' | 'output'
-let selId = null;
+let selId = null; // selected slice id
+let selScreenId = null; // selected screen id (tree selection when no slice selected)
 let activeScreenId = null;
 let caps = null;
 let maskEdit = false;
@@ -54,6 +55,38 @@ function sliceRect(s, v) {
 }
 function selected() {
   return project.slices.find((s) => s.id === selId) || null;
+}
+function selectedScreen() {
+  if (selId) return null; // a slice selection wins
+  return project.screens.find((s) => s.id === selScreenId) || null;
+}
+
+// Tree selection (Resolume-style): screen or slice
+function selectScreen(id) {
+  const changed = activeScreenId !== id;
+  selScreenId = id;
+  selId = null;
+  activeScreenId = id;
+  refreshSliceList();
+  refreshProps();
+  refreshScreenSelectors();
+  if (view === 'output' && changed) fitView('output');
+  draw();
+}
+function selectSlice(id) {
+  selId = id;
+  const s = selected();
+  if (s) {
+    const scrId = sliceScreenId(s);
+    const changed = activeScreenId !== scrId;
+    selScreenId = scrId;
+    activeScreenId = scrId;
+    if (view === 'output' && changed) fitView('output');
+  }
+  refreshSliceList();
+  refreshProps();
+  refreshScreenSelectors();
+  draw();
 }
 function visibleSlices(v) {
   if (v === 'input') return project.slices;
@@ -141,6 +174,7 @@ function pushHistoryThrottled(ms) {
 async function restoreSnapshot(json) {
   project = migrateProject(JSON.parse(json));
   if (selId && !project.slices.some((s) => s.id === selId)) selId = null;
+  if (selScreenId && !project.screens.some((s) => s.id === selScreenId)) selScreenId = null;
   if (!project.screens.some((s) => s.id === activeScreenId)) activeScreenId = project.screens[0].id;
   await loadAllRefs();
   loadExportListFromProject();
@@ -685,6 +719,8 @@ function onMouseDown(e) {
   if (s) {
     if (selId !== s.id) {
       selId = s.id;
+      selScreenId = sliceScreenId(s);
+      activeScreenId = selScreenId;
       refreshSliceList();
       refreshProps();
     }
@@ -693,8 +729,9 @@ function onMouseDown(e) {
     draw();
     return;
   }
-  if (selId !== null) {
+  if (selId !== null || selScreenId !== null) {
     selId = null;
+    selScreenId = null;
     refreshSliceList();
     refreshProps();
     draw();
@@ -804,61 +841,109 @@ function zoomAt(px, py, factor) {
 }
 
 // ---------------- UI refresh ----------------
+// Resolume Advanced Output-style tree: screens with their slices nested below.
 function refreshSliceList() {
-  const list = $('slice-list');
+  const list = $('screen-tree');
+  if (!list) return;
   const scroll = list.scrollTop;
   list.innerHTML = '';
-  const multi = project.screens.length > 1;
-  project.slices.forEach((s, idx) => {
-    const item = document.createElement('div');
-    item.className = 'slice-item' + (s.id === selId ? ' selected' : '') + (s.enabled === false ? ' off' : '');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = s.enabled !== false;
-    cb.addEventListener('click', (e) => e.stopPropagation());
-    cb.addEventListener('change', () => {
+
+  project.screens.forEach((sc) => {
+    const head = document.createElement('div');
+    head.className = 'screen-row' + (selectedScreen() && selectedScreen().id === sc.id ? ' selected' : '');
+    const chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.textContent = '▾';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = sc.name;
+    const res = document.createElement('span');
+    res.className = 'res';
+    res.textContent = `${sc.width}×${sc.height}`;
+    head.append(chev, nm, res);
+    head.onclick = () => selectScreen(sc.id);
+    // drop a slice onto the screen header = move it into this screen
+    head.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      head.classList.add('drag-over-bottom');
+    });
+    head.addEventListener('dragleave', () => head.classList.remove('drag-over-bottom'));
+    head.addEventListener('drop', (e) => {
+      e.preventDefault();
+      head.classList.remove('drag-over-bottom');
+      const sid = e.dataTransfer.getData('text/slice');
+      const src = project.slices.find((x) => x.id === sid);
+      if (!src) return;
       pushHistory();
-      s.enabled = cb.checked;
+      project.slices.splice(project.slices.indexOf(src), 1);
+      project.slices.push(src);
+      src.screenId = sc.id;
       refreshSliceList();
       refreshProps();
       draw();
       markDirty();
     });
-    const nm = document.createElement('span');
-    nm.className = 'nm';
-    nm.textContent = s.name;
-    item.append(cb, nm);
-    if (multi) {
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = 'S' + (project.screens.findIndex((sc) => sc.id === sliceScreenId(s)) + 1);
-      item.append(badge);
-    }
-    const sz = document.createElement('span');
-    sz.className = 'sz';
-    const r = sliceRect(s, view);
-    sz.textContent = `${r.w}×${r.h}`;
-    item.append(sz);
-    item.addEventListener('click', () => {
-      selId = s.id;
-      if (view === 'output' && sliceScreenId(s) !== activeScreen().id) {
-        activeScreenId = sliceScreenId(s);
-        refreshScreenSelectors();
-        fitView('output');
-      }
-      refreshSliceList();
-      refreshProps();
-      draw();
-    });
-    enableReorder(item, idx, (from, to) => {
-      pushHistory();
-      if (moveItem(project.slices, from, to)) {
+    list.appendChild(head);
+
+    project.slices.forEach((s) => {
+      if (sliceScreenId(s) !== sc.id) return;
+      const item = document.createElement('div');
+      item.className = 'slice-item' + (s.id === selId ? ' selected' : '') + (s.enabled === false ? ' off' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = s.enabled !== false;
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', () => {
+        pushHistory();
+        s.enabled = cb.checked;
+        refreshSliceList();
+        refreshProps();
+        draw();
+        markDirty();
+      });
+      const snm = document.createElement('span');
+      snm.className = 'nm';
+      snm.textContent = s.name;
+      const sz = document.createElement('span');
+      sz.className = 'sz';
+      const r = sliceRect(s, view);
+      sz.textContent = `${r.w}×${r.h}`;
+      item.append(cb, snm, sz);
+      item.addEventListener('click', () => selectSlice(s.id));
+      // drag to reorder within / move between screens
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/slice', s.id);
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const rr = item.getBoundingClientRect();
+        const before = e.clientY < rr.top + rr.height / 2;
+        item.classList.toggle('drag-over-top', before);
+        item.classList.toggle('drag-over-bottom', !before);
+      });
+      item.addEventListener('dragleave', () => item.classList.remove('drag-over-top', 'drag-over-bottom'));
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        item.classList.remove('drag-over-top', 'drag-over-bottom');
+        const sid = e.dataTransfer.getData('text/slice');
+        if (!sid || sid === s.id) return;
+        const src = project.slices.find((x) => x.id === sid);
+        if (!src) return;
+        pushHistory();
+        const rr = item.getBoundingClientRect();
+        const before = e.clientY < rr.top + rr.height / 2;
+        project.slices.splice(project.slices.indexOf(src), 1);
+        const idx = project.slices.indexOf(s) + (before ? 0 : 1);
+        project.slices.splice(idx, 0, src);
+        src.screenId = sliceScreenId(s);
         refreshSliceList();
         draw();
         markDirty();
-      }
+      });
+      list.appendChild(item);
     });
-    list.appendChild(item);
   });
   list.scrollTop = scroll;
 }
@@ -875,13 +960,6 @@ function refreshScreenSelectors() {
   const opts = project.screens
     .map((sc, i) => `<option value="${sc.id}">${i + 1}. ${sc.name} (${sc.width}×${sc.height})</option>`)
     .join('');
-  const psel = $('p-screen-select');
-  psel.innerHTML = opts;
-  psel.value = activeScreen().id;
-  const tsel = $('screen-select');
-  tsel.innerHTML = opts;
-  tsel.value = activeScreen().id;
-  tsel.classList.toggle('hidden', !(project.screens.length > 1 && view === 'output' && page === 'editor'));
   const slsel = $('sl-screen');
   slsel.innerHTML = opts;
   const rpsel = $('rp-screen-select');
@@ -889,22 +967,23 @@ function refreshScreenSelectors() {
   if (!project.screens.some((sc) => sc.id === rp.screenId)) rp.screenId = project.screens[0].id;
   rpsel.value = rp.screenId;
   rpsel.classList.toggle('hidden', !(project.screens.length > 1 && rp.viewMode === 'output'));
-  const sc = activeScreen();
-  $('scr-name').value = sc.name;
-  $('out-w').value = sc.width;
-  $('out-h').value = sc.height;
-  $('p-screen-del').disabled = project.screens.length <= 1;
 }
 
 function refreshProps() {
   const s = selected();
-  const sec = $('slice-props');
-  sec.style.opacity = s ? 1 : 0.4;
+  const scr = selectedScreen();
+  // Resolume-style: show only the selected item's properties
+  $('slice-props').classList.toggle('hidden', !s);
+  $('screen-props').classList.toggle('hidden', !scr);
+  if (scr) {
+    $('scr-name').value = scr.name;
+    $('out-w').value = scr.width;
+    $('out-h').value = scr.height;
+    const n = project.slices.filter((x) => sliceScreenId(x) === scr.id).length;
+    $('scr-info').textContent = `${n} slice${n === 1 ? '' : 's'} on this screen`;
+  }
   const set = (id, val) => { $(id).value = val; };
   if (!s) {
-    ['sl-name', 'sl-in-x', 'sl-in-y', 'sl-in-w', 'sl-in-h', 'sl-out-x', 'sl-out-y', 'sl-out-w', 'sl-out-h', 'mask-x', 'mask-y', 'mask-w', 'mask-h'].forEach((id) => ($(id).value = ''));
-    $('sl-enabled').checked = false;
-    $('mask-enabled').checked = false;
     $('mask-edit').checked = false;
     return;
   }
@@ -1007,10 +1086,7 @@ function addSlice() {
     out: { x: Math.round(sc.width / 4), y: Math.round(sc.height / 4), w: Math.round(sc.width / 2), h: Math.round(sc.height / 2) },
   });
   project.slices.push(s);
-  selId = s.id;
-  refreshSliceList();
-  refreshProps();
-  draw();
+  selectSlice(s.id);
   markDirty();
 }
 
@@ -1025,10 +1101,7 @@ function duplicateSlice() {
   c.out.x += 20; c.out.y += 20;
   if (c.mask && c.mask.points) c.mask.points.forEach((p) => { p.x += 20; p.y += 20; });
   project.slices.splice(project.slices.indexOf(s) + 1, 0, c);
-  selId = c.id;
-  refreshSliceList();
-  refreshProps();
-  draw();
+  selectSlice(c.id);
   markDirty();
 }
 
@@ -1036,11 +1109,46 @@ function deleteSlice() {
   const s = selected();
   if (!s) return;
   pushHistory();
+  const scrId = sliceScreenId(s);
   project.slices.splice(project.slices.indexOf(s), 1);
   selId = null;
+  selScreenId = scrId; // fall back to selecting its screen
   refreshSliceList();
   refreshProps();
   draw();
+  markDirty();
+}
+
+function duplicateScreen() {
+  const scr = selectedScreen();
+  if (!scr) return;
+  pushHistory();
+  const copy = { id: 'scr' + Math.random().toString(36).slice(2, 7), name: scr.name + ' copy', width: scr.width, height: scr.height };
+  project.screens.splice(project.screens.indexOf(scr) + 1, 0, copy);
+  // copy the screen's slices too
+  const newSlices = project.slices
+    .filter((s) => sliceScreenId(s) === scr.id)
+    .map((s) => {
+      const c = JSON.parse(JSON.stringify(s));
+      c.id = uid();
+      c.screenId = copy.id;
+      return c;
+    });
+  project.slices.push(...newSlices);
+  selectScreen(copy.id);
+  markDirty();
+}
+
+function deleteSelectedScreen() {
+  const scr = selectedScreen();
+  if (!scr || project.screens.length <= 1) return;
+  if (!confirm(`Delete screen "${scr.name}"? Its slices move to the first screen.`)) return;
+  pushHistory();
+  project.screens.splice(project.screens.indexOf(scr), 1);
+  project.slices.forEach((s) => {
+    if (s.screenId === scr.id) s.screenId = project.screens[0].id;
+  });
+  selectScreen(project.screens[0].id);
   markDirty();
 }
 
@@ -2373,6 +2481,7 @@ async function importXml() {
 async function switchToProject(p) {
   project = migrateProject(p);
   selId = null;
+  selScreenId = null;
   activeScreenId = project.screens[0].id;
   await loadAllRefs();
   loadExportListFromProject();
@@ -2475,9 +2584,15 @@ function bindUI() {
   $('btn-import-xml').onclick = importXml;
   $('btn-export-xml').onclick = exportXml;
 
-  $('btn-add-slice').onclick = addSlice;
-  $('btn-dup-slice').onclick = duplicateSlice;
-  $('btn-del-slice').onclick = deleteSlice;
+  // Duplicate / Delete apply to the tree selection (slice or screen)
+  $('btn-dup-slice').onclick = () => {
+    if (selected()) duplicateSlice();
+    else if (selectedScreen()) duplicateScreen();
+  };
+  $('btn-del-slice').onclick = () => {
+    if (selected()) deleteSlice();
+    else if (selectedScreen()) deleteSelectedScreen();
+  };
   $('btn-split-slice').onclick = openSplitModal;
 
   $('tp-preview').onclick = testPatternAsReference;
@@ -2515,59 +2630,42 @@ function bindUI() {
   bindInputDim('in-w', 'width');
   bindInputDim('in-h', 'height');
 
-  $('p-screen-select').onchange = () => {
-    activeScreenId = $('p-screen-select').value;
-    refreshScreenSelectors();
-    if (view === 'output') fitView('output');
-    refreshSliceList();
-    draw();
+  // "+" menu (Resolume-style add button)
+  $('btn-add-menu').onclick = (e) => {
+    e.stopPropagation();
+    $('add-popup').classList.toggle('hidden');
   };
-  $('screen-select').onchange = () => {
-    activeScreenId = $('screen-select').value;
-    refreshScreenSelectors();
-    fitView('output');
-    refreshSliceList();
-    draw();
-  };
-  $('p-screen-add').onclick = () => {
+  window.addEventListener('click', () => $('add-popup').classList.add('hidden'));
+  $('add-screen-item').onclick = () => {
     pushHistory();
     const n = project.screens.length + 1;
     const sc = { id: 'scr' + Math.random().toString(36).slice(2, 7), name: 'Output #' + n, width: 1920, height: 1080 };
     project.screens.push(sc);
-    activeScreenId = sc.id;
-    refreshScreenSelectors();
-    refreshSliceList();
-    draw();
+    selectScreen(sc.id);
     markDirty();
   };
-  $('p-screen-del').onclick = () => {
-    if (project.screens.length <= 1) return;
-    const sc = activeScreen();
-    if (!confirm(`Delete screen "${sc.name}"? Its slices move to the first screen.`)) return;
-    pushHistory();
-    project.screens.splice(project.screens.indexOf(sc), 1);
-    project.slices.forEach((s) => {
-      if (s.screenId === sc.id) s.screenId = project.screens[0].id;
-    });
-    activeScreenId = project.screens[0].id;
-    refreshScreenSelectors();
-    refreshSliceList();
-    draw();
-    markDirty();
-  };
+  $('add-slice-item').onclick = () => addSlice();
+
+  // screen properties (right panel, shown when a screen is selected in the tree)
   $('scr-name').onchange = () => {
+    const scr = selectedScreen();
+    if (!scr) return;
     pushHistory();
-    activeScreen().name = $('scr-name').value || 'Output';
-    refreshScreenSelectors();
+    scr.name = $('scr-name').value || 'Output';
     refreshSliceList();
+    refreshScreenSelectors();
     markDirty();
   };
   const bindScreenDim = (id, key) => {
     $(id).onchange = () => {
+      const scr = selectedScreen();
+      if (!scr) return;
       pushHistory();
-      activeScreen()[key] = clampInt($(id).value, 1, 32768);
-      $(id).value = activeScreen()[key];
+      scr[key] = clampInt($(id).value, 1, 32768);
+      $(id).value = scr[key];
+      refreshSliceList();
       refreshScreenSelectors();
+      if (view === 'output') fitView('output');
       draw();
       drawRenderPreview();
       markDirty();
@@ -2599,6 +2697,8 @@ function bindUI() {
     if (!s) return;
     pushHistory();
     s.screenId = $('sl-screen').value;
+    selScreenId = s.screenId;
+    activeScreenId = s.screenId;
     refreshSliceList();
     draw();
     markDirty();
@@ -2976,6 +3076,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   refreshCodecUI();
 
   if (params.get('page') === 'render') switchPage('render');
+  if (params.get('sel') === 'screen') selectScreen(project.screens[0].id);
+  if (params.get('sel') === 'slice') selectSlice(project.slices[0] && project.slices[0].id);
 
   // Tour/screenshot hooks — only when launched with ?demo=1 (used by tools/--shoot)
   if (params.get('demo') === '1') {
@@ -3013,6 +3115,69 @@ window.addEventListener('DOMContentLoaded', async () => {
       hasPreview: () => {
         const f = activeFile();
         return !!(f && f.frameImg);
+      },
+      // Exact bounding boxes of UI panels (physical px, matching capturePage output)
+      // so tutorial highlight boxes are guaranteed to align.
+      rects: () => {
+        const dpr = window.devicePixelRatio || 1;
+        const R = (el) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { x: r.left * dpr, y: r.top * dpr, w: r.width * dpr, h: r.height * dpr };
+        };
+        const union = (...rs) => {
+          rs = rs.filter(Boolean);
+          if (!rs.length) return null;
+          const x0 = Math.min(...rs.map((r) => r.x));
+          const y0 = Math.min(...rs.map((r) => r.y));
+          const x1 = Math.max(...rs.map((r) => r.x + r.w));
+          const y1 = Math.max(...rs.map((r) => r.y + r.h));
+          return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+        };
+        const q = (sel) => document.querySelector(sel);
+        const out = { page };
+        if (page === 'editor') {
+          out.project = R(q('#right .section'));
+          const items = [...document.querySelectorAll('#screen-tree .slice-item')];
+          out.slices = union(R(q('#left .panel-title')), ...items.map(R));
+          out.sliceProps = R(q('#slice-props'));
+          out.xmlButtons = union(R($('btn-import-xml')), R($('btn-export-xml')));
+          // the drawn input canvas inside the editor view
+          const cb = canvas.getBoundingClientRect();
+          const t = vt[view];
+          const ws = worldSize(view);
+          out.canvasArea = {
+            x: (cb.left + t.ox) * dpr,
+            y: (cb.top + t.oy) * dpr,
+            w: ws.w * t.scale * dpr,
+            h: ws.h * t.scale * dpr,
+          };
+        } else {
+          out.footage = union(
+            R(q('#rp-left .panel-title')),
+            ...[...document.querySelectorAll('.file-row')].map(R),
+            R(q('#rp-left .left-buttons'))
+          );
+          const cb = rpCanvas.getBoundingClientRect();
+          const w2 = rpWorld();
+          out.previewCanvas = {
+            x: (cb.left + rp.vt.ox) * dpr,
+            y: (cb.top + rp.vt.oy) * dpr,
+            w: w2.w * rp.vt.scale * dpr,
+            h: w2.h * rp.vt.scale * dpr,
+          };
+          out.clip = R(q('#rp-clip-section'));
+          out.timeline = R(q('#rp-timeline'));
+          out.codecRow = R($('r-codec') && $('r-codec').closest('.row'));
+          out.alphaGpu = union(
+            R($('r-alpha') && $('r-alpha').closest('.row')),
+            R($('r-same-as-source') && $('r-same-as-source').closest('.row')),
+            R($('r-gpu') && $('r-gpu').closest('.row')),
+            R($('r-codec-note'))
+          );
+          out.startBtn = R($('r-start'));
+        }
+        return out;
       },
     };
     window.__demoReady = true;

@@ -1,0 +1,61 @@
+════════════════════════════════════════════════
+YOUTUBE UPLOAD — kopieer en plak onderstaande velden
+Bestand: ~/Documents/XtremeLED remap export/docs/tutorial-walkthrough-voiceover.mp4  (1:23)
+════════════════════════════════════════════════
+
+── TITEL (kies er één) ─────────────────────────
+
+1)  XtremeLED Remap Export — Play complex LED screens from any laptop (free & open source)
+
+2)  Map & play a 50m LED wall without a media server — XtremeLED Remap Export (free)
+
+3)  XtremeLED Remap Export — Full walkthrough | Stageview → output-mapped LED content
+
+── BESCHRIJVING ───────────────────────────────
+
+Turn stageview renders into output-mapped LED content — and play complex screen mappings from any simple playback device: a laptop, VLC, a media player… even PowerPoint. No virtual displays, no slice transforms, no expensive playout software on site.
+
+This 90-second walkthrough shows the full workflow — from mapping to a ready-to-play export.
+
+⏱️ Chapters
+0:00 Intro
+0:06 The Mapping page
+0:11 Input & output size
+0:16 Slices
+0:22 Rotation, flip & masks
+0:27 Resolume XML import/export
+0:32 Output Map
+0:38 Adding footage
+0:43 Live preview
+0:48 Per-clip adjust
+0:53 Trim
+0:59 Codecs (DXV3, HAP, ProRes, HEVC, H.264, PNG, WAV)
+1:04 Alpha, bit depth & GPU
+1:09 Output & export
+1:14 Play it on any device
+
+✅ 100% free & open source
+✅ macOS (Intel & Apple Silicon) and Windows
+✅ Resolume Advanced Output-compatible XML
+✅ DXV3 · HAP · ProRes · HEVC · H.264 · PNG · WAV
+✅ Native ffmpeg built in — zero installation
+
+⬇️ Download (free):
+https://github.com/MikeXtremeLED/xtremeled-remap-export
+
+Built for real-world LED shows by XtremeLED — https://www.xtremeled.nl
+
+#LED #ledscreen #ledwall #Resolume #videomapping #VJ #stagedesign #eventtech #AV #DXV #ProRes #opensource
+
+── TAGS (komma-gescheiden) ────────────────────
+
+LED screen, LED wall, video mapping, Resolume, DXV, HAP, ProRes, VJ, stage design, event tech, LED mapping, media server, playout, ledscherm, AV, open source, XtremeLED, output mapping
+
+── INSTELLINGEN ───────────────────────────────
+
+• Categorie: Science & Technology  (of: Howto & Style)
+• Zichtbaarheid: Openbaar
+• Taal video: Engels
+• "Gemaakt voor kinderen": Nee
+• Miniatuur/thumbnail: gebruik docs/hero.png  of  docs/what-it-does.png
+════════════════════════════════════════════════
