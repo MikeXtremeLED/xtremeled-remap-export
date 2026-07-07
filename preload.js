@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('xre', {
   previewWaveform: (src) => ipcRenderer.invoke('preview:waveform', src),
   pathParse: (p) => ipcRenderer.invoke('path:parse', p),
   pathJoin: (...parts) => ipcRenderer.invoke('path:join', ...parts),
+  pathToFileUrl: (p) => ipcRenderer.invoke('path:toFileUrl', p),
   ffmpegCaps: () => ipcRenderer.invoke('ffmpeg:caps'),
   previewProbe: (src) => ipcRenderer.invoke('preview:probe', src),
   previewFrame: (src, timeSec) => ipcRenderer.invoke('preview:frame', src, timeSec),

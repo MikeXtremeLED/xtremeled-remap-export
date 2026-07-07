@@ -30,7 +30,9 @@ t = t.replace(
 fs.writeFileSync(plist, t);
 
 try {
-  execSync(`codesign --force --deep --sign - "${appDir}"`, { stdio: 'pipe' });
+  // NB: --preserve-metadata keeps the entitlements (allow-jit etc.) — without it,
+  // re-signing breaks Chromium's media codecs (H.264 videos freeze at t=0).
+  execSync(`codesign --force --deep --preserve-metadata=entitlements,requirements,flags --sign - "${appDir}"`, { stdio: 'pipe' });
   console.log('Electron app name patched and re-signed');
 } catch (e) {
   console.warn('codesign failed (app may still work):', e.message);

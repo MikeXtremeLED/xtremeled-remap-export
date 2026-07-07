@@ -1091,6 +1091,7 @@ function switchView(v) {
 }
 
 function switchPage(p) {
+  if (p !== 'render') stopPlayback(false);
   page = p;
   $('editor-page').classList.toggle('hidden', p !== 'editor');
   $('render-page').classList.toggle('hidden', p !== 'render');
@@ -1758,6 +1759,7 @@ async function addFootage(paths, opts) {
 }
 
 function selectFile(i) {
+  stopPlayback(false);
   rp.activeIndex = i;
   const f = activeFile();
   refreshFileList();
@@ -1797,6 +1799,7 @@ function layoutTimeline() {
   $('tl-play').style.display = usable ? '' : 'none';
   $('tl-sel').style.display = usable ? '' : 'none';
   $('tl-cur').textContent = fmtTC(usable ? f.curTime || 0 : 0);
+  updatePlayBtn();
   if (usable) {
     const trimmed = (f.inSec != null || f.outSec != null);
     $('tl-len').textContent = trimmed
@@ -1863,6 +1866,9 @@ function bindTimeline() {
     const f = activeFile();
     if (!f || f.isImage || !fileDuration(f)) return;
     f.curTime = timelineSecFromEvent(e);
+    if (rp.playing && videoOkForPath === f.path) {
+      try { rpVideo.currentTime = f.curTime; } catch (err) { /* seek */ }
+    }
     layoutTimeline();
     fetchFrame(false);
   };
@@ -1904,6 +1910,7 @@ function bindTimeline() {
 function fetchFrame(immediate) {
   const f = activeFile();
   if (!f) return;
+  if (rp.playing) return; // playback drives the preview
   if (frameTimer) clearTimeout(frameTimer);
   frameTimer = setTimeout(async () => {
     const time = f.isImage ? 0 : f.curTime || 0;
@@ -1921,6 +1928,149 @@ function fetchFrame(immediate) {
       drawRenderPreview();
     }
   }, immediate ? 0 : 180);
+}
+
+// ---------------- preview playback (play/pause) ----------------
+// Chromium-decodable footage (H.264/HEVC/VP9…) plays natively via a <video> element,
+// smooth and with audio. Other codecs (ProRes/DXV/HAP) fall back to stepping
+// ffmpeg-extracted frames at a lower rate.
+let rpVideo = null;
+let playRAF = null;
+let playFallbackTimer = null;
+let videoOkForPath = null; // path that loaded successfully in the <video> element
+let lastPlayDraw = 0;
+
+function updatePlayBtn() {
+  const f = activeFile();
+  const btn = $('rp-play');
+  btn.textContent = rp.playing ? '⏸' : '▶';
+  btn.disabled = !f || f.isImage || !fileDuration(f);
+}
+
+function loadNativeVideo(p) {
+  return new Promise((resolve, reject) => {
+    const onOk = () => { cleanup(); resolve(); };
+    const onErr = () => { cleanup(); reject(new Error('codec not supported by preview player')); };
+    const cleanup = () => {
+      rpVideo.removeEventListener('canplay', onOk);
+      rpVideo.removeEventListener('error', onErr);
+    };
+    rpVideo.addEventListener('canplay', onOk);
+    rpVideo.addEventListener('error', onErr);
+    api.pathToFileUrl(p).then((url) => {
+      rpVideo.src = url;
+      rpVideo.load();
+    }).catch(onErr);
+  });
+}
+
+async function startPlayback() {
+  const f = activeFile();
+  if (!f || f.isImage) return;
+  const dur = fileDuration(f);
+  if (!dur) return;
+  const inP = f.inSec != null ? f.inSec : 0;
+  const outP = f.outSec != null ? f.outSec : dur;
+  let startT = f.curTime || inP;
+  if (startT >= outP - 0.05 || startT < inP) startT = inP;
+
+  if (videoOkForPath !== f.path) {
+    try {
+      await loadNativeVideo(f.path);
+      videoOkForPath = f.path;
+    } catch (e) {
+      videoOkForPath = 'FAIL:' + f.path;
+    }
+  }
+  rp.playing = true;
+  updatePlayBtn();
+
+  if (videoOkForPath === f.path) {
+    // native, smooth playback (with audio) — interval instead of rAF so it also
+    // runs when the window is hidden/minimized
+    rpVideo.muted = rp.previewMuted !== false; // default muted: keeps the clock running
+    $('rp-mute').textContent = rpVideo.muted ? '🔇' : '🔊';
+    rpVideo.currentTime = startT;
+    rpVideo.play().catch(() => {});
+    // watchdog: if the clock doesn't advance (broken decoder), fall back to ffmpeg stepping
+    setTimeout(() => {
+      if (rp.playing && videoOkForPath === f.path && rpVideo.currentTime <= startT + 0.05) {
+        videoOkForPath = 'FAIL:' + f.path;
+        stopPlayback(false);
+        startPlayback();
+      }
+    }, 900);
+    let lastT = -1;
+    let lastChange = performance.now();
+    playRAF = setInterval(() => {
+      if (!rp.playing) return;
+      const f2 = activeFile();
+      if (!f2 || f2.path !== f.path) { stopPlayback(false); return; }
+      // clock-stall safety net (e.g. after unmuting on a machine without working audio out)
+      if (rpVideo.currentTime !== lastT) {
+        lastT = rpVideo.currentTime;
+        lastChange = performance.now();
+      } else if (performance.now() - lastChange > 1200 && !rpVideo.muted) {
+        rpVideo.muted = true;
+        rp.previewMuted = true;
+        $('rp-mute').textContent = '🔇';
+      }
+      f.curTime = rpVideo.currentTime;
+      const end = f.outSec != null ? f.outSec : fileDuration(f);
+      if (rpVideo.ended || rpVideo.currentTime >= end - 0.02) {
+        rpVideo.currentTime = f.inSec != null ? f.inSec : 0; // loop within trim
+      }
+      f.frameImg = rpVideo; // drawImage accepts a <video> element directly
+      layoutTimeline();
+      drawRenderPreview();
+    }, 33);
+  } else {
+    // fallback: step ffmpeg frames (ProRes/DXV/HAP sources) — lower fps but real content
+    f.curTime = startT;
+    let last = performance.now();
+    const step = async () => {
+      if (!rp.playing) return;
+      const now = performance.now();
+      f.curTime = (f.curTime || 0) + (now - last) / 1000;
+      last = now;
+      const end = f.outSec != null ? f.outSec : fileDuration(f);
+      if (f.curTime >= end) f.curTime = f.inSec != null ? f.inSec : 0;
+      try {
+        const dataUrl = await api.previewFrame(f.path, f.curTime);
+        if (!rp.playing) return;
+        const img = new Image();
+        img.onload = () => {
+          if (!rp.playing) return;
+          f.frameImg = img;
+          layoutTimeline();
+          drawRenderPreview();
+          playFallbackTimer = setTimeout(step, 20);
+        };
+        img.src = dataUrl;
+      } catch (e) {
+        playFallbackTimer = setTimeout(step, 250);
+      }
+    };
+    step();
+  }
+}
+
+function stopPlayback(fetchStill = true) {
+  const wasPlaying = rp.playing;
+  rp.playing = false;
+  updatePlayBtn();
+  if (playRAF) { clearInterval(playRAF); playRAF = null; }
+  if (playFallbackTimer) { clearTimeout(playFallbackTimer); playFallbackTimer = null; }
+  try { rpVideo.pause(); } catch (e) { /* not loaded */ }
+  const f = activeFile();
+  if (f && f.frameImg === rpVideo) f.frameImg = null;
+  if (wasPlaying && fetchStill) fetchFrame(true); // pixel-accurate still at the pause point
+  layoutTimeline();
+}
+
+function togglePlayback() {
+  if (rp.playing) stopPlayback();
+  else startPlayback();
 }
 
 // ---------------- clip controls ----------------
@@ -2307,6 +2457,7 @@ function buildMergedProject() {
 // ---------------- start export ----------------
 async function startRender(filesOverride, optsOverride) {
   if (rp.running) return;
+  stopPlayback(false);
   const files = filesOverride || rp.files.filter((f) => f.selected !== false);
   if (!files.length) return;
   const codecId = $('r-codec').value;
@@ -2920,6 +3071,7 @@ function bindUI() {
       return;
     }
     if (page === 'render') {
+      if (e.code === 'Space') { e.preventDefault(); togglePlayback(); return; }
       if (e.key.toLowerCase() === 'i') { $('rp-set-in').click(); return; }
       if (e.key.toLowerCase() === 'o') { $('rp-set-out').click(); return; }
       return;
@@ -3029,7 +3181,14 @@ function bindUI() {
     if (activeFile()) selectFile(rp.activeIndex);
     else drawRenderPreview();
   };
-  $('rp-refresh').onclick = () => fetchFrame(true);
+  $('rp-play').onclick = togglePlayback;
+  $('rp-mute').onclick = () => {
+    rp.previewMuted = rp.previewMuted === false; // toggle (default true)
+    rp.previewMuted = !rpVideo.muted ? true : false;
+    rpVideo.muted = rp.previewMuted;
+    $('rp-mute').textContent = rpVideo.muted ? '🔇' : '🔊';
+  };
+  $('rp-refresh').onclick = () => { stopPlayback(false); fetchFrame(true); };
   $('rp-set-in').onclick = () => {
     const f = activeFile();
     if (!f || f.isImage) return;
@@ -3133,6 +3292,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   ctx = canvas.getContext('2d');
   rpCanvas = $('rp-canvas');
   rpCtx = rpCanvas.getContext('2d');
+  rpVideo = $('rp-video');
 
   const params = new URLSearchParams(location.search);
   const demo = params.get('demo') === '1';
@@ -3181,6 +3341,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       },
       addTestFootage: async () => {
         await addTestPattern(); // switches to Export page and adds the test pattern
+      },
+      addFootagePath: async (p) => {
+        if (page !== 'render') switchPage('render');
+        await addFootage([p], { select: true });
+      },
+      playState: () => {
+        const f = activeFile();
+        return JSON.stringify({ playing: rp.playing, t: f ? f.curTime : null, native: videoOkForPath === (f && f.path) });
       },
       rpInput: () => {
         rp.viewMode = 'input';

@@ -6,6 +6,11 @@ const os = require('os');
 const renderMod = require('./src/main/render');
 
 app.setName('XtremeLED Remap Export');
+// Desktop tool: allow the preview player to start programmatically (spacebar/UI)
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Hardware H.264 decode silently stalls on some machines (video stuck at t=0,
+// readyState 4, no error). Software decode is plenty for the preview player.
+app.commandLine.appendSwitch('disable-accelerated-video-decode');
 
 // Application menu with standard Edit roles. On Windows/Linux there is NO default
 // menu, so without this the Cut/Copy/Paste/Undo/Select-All keyboard shortcuts don't
@@ -53,6 +58,36 @@ const makePosterArg = process.argv.find((a) => a.startsWith('--makeposter='));
 const makeVideoArg = process.argv.find((a) => a.startsWith('--makevideo='));
 const shootArg = process.argv.find((a) => a.startsWith('--shoot='));
 const makeTutArg = process.argv.find((a) => a.startsWith('--maketut='));
+const e2eArg = process.argv.find((a) => a.startsWith('--e2e='));
+
+// E2E test mode: load the real app (all IPC handlers live) and run a page-side script.
+// The script runs as an async body; its return value is printed as E2E RESULT.
+function runE2E() {
+  const scriptPath = e2eArg.slice('--e2e='.length);
+  const w = new BrowserWindow({
+    width: 1600,
+    height: 1000,
+    show: process.env.E2E_SHOW === '1',
+    backgroundColor: '#1d2022',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      backgroundThrottling: false, // keep rAF/video running while hidden
+    },
+  });
+  w.webContents.on('console-message', (e, l, msg) => console.log('PAGE:', msg));
+  w.loadFile(path.join(__dirname, 'src/renderer/index.html'), { query: { demo: '1' } });
+  w.webContents.once('did-finish-load', async () => {
+    const code = fs.readFileSync(scriptPath, 'utf8');
+    try {
+      const out = await w.webContents.executeJavaScript(`(async () => { ${code} })()`);
+      console.log('E2E RESULT:', out);
+    } catch (err) {
+      console.error('E2E ERROR:', err.message);
+    }
+    app.quit();
+  });
+}
 
 // Render tools/tutorial-build.html frame-by-frame to a folder of PNGs (1920x1080 @ 30fps)
 function makeTut() {
@@ -319,6 +354,7 @@ app.whenReady().then(() => {
   if (makeVideoArg) return makeVideo();
   if (shootArg) return shootTutorial();
   if (makeTutArg) return makeTut();
+  if (e2eArg) return runE2E();
   buildMenu();
   const iconPng = path.join(__dirname, 'build/icon.png');
   if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPng)) {
@@ -418,6 +454,7 @@ ipcMain.handle('path:parse', (e, p) => ({
 }));
 
 ipcMain.handle('path:join', (e, ...parts) => path.join(...parts));
+ipcMain.handle('path:toFileUrl', (e, p) => require('url').pathToFileURL(p).href);
 
 ipcMain.handle('ffmpeg:caps', () => renderMod.getCapabilities());
 ipcMain.handle('render:start', (e, payload) => renderMod.startBatch(win, payload));
