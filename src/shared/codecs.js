@@ -17,7 +17,6 @@
     { id: 'dxv_hq', label: 'DXV3 High Quality (HAP Q)', ext: 'mov', alpha: [], depths: [8], group: 'DXV', needsHap: true, note: 'Encoded as HAP Q — the same DXT5-YCoCg compression as DXV3 HQ, and Resolume plays it natively.' },
     { id: 'hap', label: 'HAP Standard', ext: 'mov', alpha: ['straight'], depths: [8], group: 'HAP' },
     { id: 'hap_q', label: 'HAP Q', ext: 'mov', alpha: [], depths: [8], group: 'HAP' },
-    { id: 'notchlc', label: 'Notch LC', ext: 'mov', alpha: [], depths: [10], group: 'Other', unsupported: 'Notch LC is a closed codec — only Notch\'s own encoder/SDK can create it (ffmpeg is decode-only). Use HAP Q or ProRes instead.' },
     { id: 'hevc', label: 'HEVC / H.265', ext: 'mp4', alpha: [], depths: [8, 10, 12], bitrate: true, group: 'Delivery' },
     { id: 'h264', label: 'H.264 / AVC', ext: 'mp4', alpha: [], depths: [8], bitrate: true, group: 'Delivery' },
     { id: 'png', label: 'PNG still', ext: 'png', alpha: ['straight', 'only'], depths: [8, 16], still: true, group: 'Image' },

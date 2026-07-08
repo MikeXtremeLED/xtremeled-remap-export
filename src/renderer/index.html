@@ -52,8 +52,8 @@
           <div class="row"><label>Name</label><input type="text" id="p-name" /></div>
           <div class="subtitle">Input canvas (stageview)</div>
           <div class="row2">
-            <label>W</label><input type="number" id="in-w" class="num" min="1" max="32768" />
-            <label>H</label><input type="number" id="in-h" class="num" min="1" max="32768" />
+            <label>W</label><input type="text" inputmode="text" id="in-w" class="num" min="1" max="32768" />
+            <label>H</label><input type="text" inputmode="text" id="in-h" class="num" min="1" max="32768" />
           </div>
         </div>
 
@@ -109,8 +109,8 @@
           <div class="row"><label>Name</label><input type="text" id="scr-name" /></div>
           <div class="subtitle">Output resolution</div>
           <div class="row2">
-            <label>W</label><input type="number" id="out-w" class="num" min="1" max="32768" />
-            <label>H</label><input type="number" id="out-h" class="num" min="1" max="32768" />
+            <label>W</label><input type="text" inputmode="text" id="out-w" class="num" min="1" max="32768" />
+            <label>H</label><input type="text" inputmode="text" id="out-h" class="num" min="1" max="32768" />
           </div>
           <div class="row"><span id="scr-info" class="dim"></span></div>
         </div>
@@ -126,10 +126,10 @@
 
           <div class="subtitle">Input rect</div>
           <div class="row4">
-            <label>X</label><input type="number" id="sl-in-x" class="num" />
-            <label>Y</label><input type="number" id="sl-in-y" class="num" />
-            <label>W</label><input type="number" id="sl-in-w" class="num" />
-            <label>H</label><input type="number" id="sl-in-h" class="num" />
+            <label>X</label><input type="text" inputmode="text" id="sl-in-x" class="num" />
+            <label>Y</label><input type="text" inputmode="text" id="sl-in-y" class="num" />
+            <label>W</label><input type="text" inputmode="text" id="sl-in-w" class="num" />
+            <label>H</label><input type="text" inputmode="text" id="sl-in-h" class="num" />
           </div>
           <div class="row">
             <label>Rotation</label>
@@ -141,10 +141,10 @@
 
           <div class="subtitle">Output rect</div>
           <div class="row4">
-            <label>X</label><input type="number" id="sl-out-x" class="num" />
-            <label>Y</label><input type="number" id="sl-out-y" class="num" />
-            <label>W</label><input type="number" id="sl-out-w" class="num" />
-            <label>H</label><input type="number" id="sl-out-h" class="num" />
+            <label>X</label><input type="text" inputmode="text" id="sl-out-x" class="num" />
+            <label>Y</label><input type="text" inputmode="text" id="sl-out-y" class="num" />
+            <label>W</label><input type="text" inputmode="text" id="sl-out-w" class="num" />
+            <label>H</label><input type="text" inputmode="text" id="sl-out-h" class="num" />
           </div>
           <div class="row">
             <label>Rotation</label>
@@ -165,10 +165,10 @@
             <label style="min-width:auto">Edit on canvas</label><input type="checkbox" id="mask-edit" />
           </div>
           <div class="row4">
-            <label>X</label><input type="number" id="mask-x" class="num" />
-            <label>Y</label><input type="number" id="mask-y" class="num" />
-            <label>W</label><input type="number" id="mask-w" class="num" />
-            <label>H</label><input type="number" id="mask-h" class="num" />
+            <label>X</label><input type="text" inputmode="text" id="mask-x" class="num" />
+            <label>Y</label><input type="text" inputmode="text" id="mask-y" class="num" />
+            <label>W</label><input type="text" inputmode="text" id="mask-w" class="num" />
+            <label>H</label><input type="text" inputmode="text" id="mask-h" class="num" />
           </div>
           <div class="note">In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it.</div>
           <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
@@ -209,7 +209,7 @@
             <button id="rp-play" class="accent" title="Play / pause the preview (Space)">▶</button>
             <button id="rp-mute" title="Preview sound on/off">🔇</button>
             <button id="rp-refresh" title="Refresh preview frame">⟳</button>
-            <input type="number" id="tl-in-n" class="num tc-num" step="0.01" min="0" placeholder="in" title="In point (s) — type for precision" />
+            <input type="text" inputmode="text" id="tl-in-n" class="num tc-num" step="0.01" min="0" placeholder="in" title="In point (s) — type for precision" />
             <button id="rp-set-in" title="Set in point at playhead (I)">[</button>
             <div id="tl-track">
               <canvas id="tl-wave"></canvas>
@@ -219,7 +219,7 @@
               <div id="tl-play"></div>
             </div>
             <button id="rp-set-out" title="Set out point at playhead (O)">]</button>
-            <input type="number" id="tl-out-n" class="num tc-num" step="0.01" min="0" placeholder="out" title="Out point (s) — type for precision" />
+            <input type="text" inputmode="text" id="tl-out-n" class="num tc-num" step="0.01" min="0" placeholder="out" title="Out point (s) — type for precision" />
             <button id="rp-clear-trim" title="Clear in/out points">✕</button>
             <span id="tl-len" class="tc dim">—</span>
           </div>
@@ -240,29 +240,29 @@
             </select>
           </div>
           <div class="row2">
-            <label style="width:56px">Pos X</label><input type="number" id="ct-x" class="num" value="0" />
-            <label style="width:14px">Y</label><input type="number" id="ct-y" class="num" value="0" />
+            <label style="width:56px">Pos X</label><input type="text" inputmode="text" id="ct-x" class="num" value="0" />
+            <label style="width:14px">Y</label><input type="text" inputmode="text" id="ct-y" class="num" value="0" />
           </div>
           <div class="row slider-row">
             <label id="ct-scale-label">Scale</label>
             <input type="range" id="ct-scale" min="1" max="400" value="100" data-default="100" />
-            <input type="number" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span>
+            <input type="text" inputmode="text" id="ct-scale-n" class="num" value="100" /><span class="dim">%</span>
             <button id="ct-link" class="link-btn active" title="Link W/H scale">🔗</button>
           </div>
           <div class="row slider-row hidden" id="ct-scaley-row">
             <label>Scale H</label>
             <input type="range" id="ct-scaley" min="1" max="400" value="100" data-default="100" />
-            <input type="number" id="ct-scaley-n" class="num" value="100" /><span class="dim">%</span>
+            <input type="text" inputmode="text" id="ct-scaley-n" class="num" value="100" /><span class="dim">%</span>
           </div>
           <div class="row2">
             <label style="width:56px">Size</label>
-            <input type="number" id="ct-px-w" class="num" style="width:72px" title="Clip width in pixels — type to set exact size" />
+            <input type="text" inputmode="text" id="ct-px-w" class="num" style="width:72px" title="Clip width in pixels — type to set exact size" />
             <label style="width:10px">×</label>
-            <input type="number" id="ct-px-h" class="num" style="width:72px" title="Clip height in pixels — type to set exact size" />
+            <input type="text" inputmode="text" id="ct-px-h" class="num" style="width:72px" title="Clip height in pixels — type to set exact size" />
             <span class="dim">px</span>
           </div>
           <div class="row"><span id="ct-pixels" class="dim"></span></div>
-          <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" data-default="0" /><input type="number" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
+          <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" data-default="0" /><input type="text" inputmode="text" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
 
           <div class="subtitle">Color <span class="dim">(right-click a slider = reset)</span></div>
           <div class="row slider-row"><label>Bright</label><input type="range" id="ct-bright" min="-100" max="100" value="0" data-default="0" /><span id="ct-bright-v" class="dim val">0</span></div>
@@ -301,7 +301,7 @@
           </div>
           <div class="row" id="r-bitrate-row">
             <label>Bitrate</label>
-            <input type="number" id="r-bitrate" class="num" style="width:70px" min="1" max="400" placeholder="auto" />
+            <input type="text" inputmode="text" id="r-bitrate" class="num" style="width:70px" min="1" max="400" placeholder="auto" />
             <span class="dim">Mbps (empty = quality mode)</span>
           </div>
           <div class="row">
@@ -316,8 +316,8 @@
           <div id="r-still-row">
             <div class="subtitle">Image footage → video</div>
             <div class="row">
-              <label style="min-width:58px">FPS</label><input type="number" id="r-fps" class="num" value="50" min="1" max="240" />
-              <label style="min-width:52px">Length</label><input type="number" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
+              <label style="min-width:58px">FPS</label><input type="text" inputmode="text" id="r-fps" class="num" value="50" min="1" max="240" />
+              <label style="min-width:52px">Length</label><input type="text" inputmode="text" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
             </div>
           </div>
           <div class="row">

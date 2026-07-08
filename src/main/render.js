@@ -206,6 +206,43 @@ function extractFrame(src, timeSec) {
 
 const effectiveSlices = (project, screenId) => Geometry.effectiveSlices(project, screenId);
 
+// ffmpeg's PNG encoder doesn't write text chunks, so inject a tEXt chunk ourselves
+// (keyword "Comment") — this shows up in image metadata / details.
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function stampPng(file, text) {
+  try {
+    const buf = fs.readFileSync(file);
+    if (buf.length < 8 || buf[0] !== 0x89 || buf[1] !== 0x50) return; // not a PNG
+    if (buf.includes(Buffer.from(text))) return; // already stamped
+    const data = Buffer.concat([Buffer.from('Comment'), Buffer.from([0]), Buffer.from(text)]);
+    const type = Buffer.from('tEXt');
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([type, data])), 0);
+    const chunk = Buffer.concat([len, type, data, crc]);
+    // insert right before the trailing IEND chunk (last 12 bytes)
+    const iendPos = buf.length - 12;
+    const out = Buffer.concat([buf.slice(0, iendPos), chunk, buf.slice(iendPos)]);
+    fs.writeFileSync(file, out);
+  } catch (e) {
+    /* stamping is best-effort */
+  }
+}
+
 // ffmpeg filter ops for slice content rotation (clockwise) + flip
 function contentOps(rot, flip) {
   const ops = [];
@@ -236,6 +273,13 @@ function adjustOps(t) {
 // job: {src, isImage, outPath, transform, inSec, outSec, pngTime, screen:{width,height,id},
 //       maskFiles: {sliceId: pngPath}}
 // opts: {codec, alpha, depth, bitrateMbps, fps, imageDuration}
+// container/file metadata written into every export
+const OUT_META = [
+  '-metadata', 'comment=Exported by XtremeLED',
+  '-metadata', 'author=XtremeLED',
+  '-metadata', 'copyright=XtremeLED',
+];
+
 function buildArgs(project, job, opts, probe) {
   const codecDef = Codecs.byId(opts.codec);
   if (!codecDef) throw new Error(`Unknown codec "${opts.codec}"`);
@@ -254,6 +298,7 @@ function buildArgs(project, job, opts, probe) {
       '-vn', '-map', '0:a:0',
       ...Codecs.encoderArgs(opts.codec, opts),
       ...(aOut ? ['-t', String(aOut - aIn)] : []),
+      ...OUT_META,
       '-progress', 'pipe:1', '-nostats',
       job.outPath,
     ];
@@ -393,6 +438,7 @@ function buildArgs(project, job, opts, probe) {
     ...(job.isImage && !isStill ? ['-r', String(fps)] : []),
     ...(isSeq && !job.isImage ? ['-fps_mode', 'passthrough'] : []),
     ...trimOut,
+    ...OUT_META,
     '-progress', 'pipe:1',
     '-nostats',
     job.outPath,
@@ -480,6 +526,16 @@ async function startBatch(win, payload) {
         send(win, { type: 'job-note', index: i, total: jobs.length, note: 'GPU encoder unavailable — falling back to CPU', label: job.label });
         const { args, durationSec } = buildArgs(project, job, { ...opts, gpu: false }, probe);
         await runFfmpeg(ffPath, args, durationSec, onPct);
+      }
+      // PNG has no container metadata — stamp the tEXt chunk into the file(s)
+      if (codec === 'png') {
+        stampPng(job.outPath, 'Exported by XtremeLED');
+      } else if (codec === 'png_seq' && job.outDir) {
+        try {
+          for (const fn of fs.readdirSync(job.outDir)) {
+            if (fn.toLowerCase().endsWith('.png')) stampPng(path.join(job.outDir, fn), 'Exported by XtremeLED');
+          }
+        } catch (e) { /* best-effort */ }
       }
       const shown = job.outDir || job.outPath;
       results.push({ src: job.src, out: shown, ok: true });

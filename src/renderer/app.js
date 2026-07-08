@@ -99,8 +99,60 @@ function extOf(p) {
 function isImagePath(p) {
   return IMAGE_EXTS.includes(extOf(p));
 }
+// Safe arithmetic evaluator so number fields can be used as a calculator
+// (supports + - * / and parentheses, e.g. "1920/2", "100*1.5", "(3840-64)/3").
+function evalCalc(str) {
+  const s = String(str).replace(/\s+/g, '');
+  if (s === '') return NaN;
+  if (!/^[-+*/().\d]+$/.test(s)) return NaN; // reject anything but math
+  let i = 0;
+  const peek = () => s[i];
+  function expr() {
+    let v = term();
+    while (peek() === '+' || peek() === '-') {
+      const op = s[i++];
+      const t = term();
+      v = op === '+' ? v + t : v - t;
+    }
+    return v;
+  }
+  function term() {
+    let v = factor();
+    while (peek() === '*' || peek() === '/') {
+      const op = s[i++];
+      const f = factor();
+      v = op === '*' ? v * f : v / f;
+    }
+    return v;
+  }
+  function factor() {
+    if (peek() === '(') { i++; const v = expr(); if (peek() === ')') i++; else throw 0; return v; }
+    if (peek() === '+') { i++; return factor(); }
+    if (peek() === '-') { i++; return -factor(); }
+    let num = '';
+    while (i < s.length && /[\d.]/.test(s[i])) num += s[i++];
+    if (num === '') throw 0;
+    return parseFloat(num);
+  }
+  try {
+    const r = expr();
+    return i === s.length && isFinite(r) ? r : NaN;
+  } catch (e) {
+    return NaN;
+  }
+}
+// parse a field value: plain number or a math expression
+function calcNum(v) {
+  if (typeof v === 'number') return v;
+  const str = String(v).trim();
+  if (/^-?\d*\.?\d+$/.test(str)) return parseFloat(str);
+  const r = evalCalc(str);
+  return isFinite(r) ? r : NaN;
+}
 function clampInt(v, min, max) {
-  v = Math.round(Number(v) || 0);
+  let n = calcNum(v);
+  if (!isFinite(n)) n = 0;
+  v = Math.round(n);
   return Math.max(min, Math.min(max, v));
 }
 function baseName(p) {
@@ -2201,17 +2253,17 @@ function bindClipControls() {
     syncExportList();
   };
   $('ct-mode').onchange = () => upd((t) => (t.mode = $('ct-mode').value));
-  $('ct-x').onchange = () => upd((t) => (t.x = clampInt($('ct-x').value, -100000, 100000)));
-  $('ct-y').onchange = () => upd((t) => (t.y = clampInt($('ct-y').value, -100000, 100000)));
+  $('ct-x').onchange = () => upd((t) => { t.x = clampInt($('ct-x').value, -100000, 100000); $('ct-x').value = t.x; });
+  $('ct-y').onchange = () => upd((t) => { t.y = clampInt($('ct-y').value, -100000, 100000); $('ct-y').value = t.y; });
   $('ct-scale').oninput = () => { $('ct-scale-n').value = $('ct-scale').value; upd((t) => (t.scale = parseFloat($('ct-scale').value))); };
-  $('ct-scale-n').onchange = () => { $('ct-scale').value = $('ct-scale-n').value; upd((t) => (t.scale = Math.max(1, parseFloat($('ct-scale-n').value) || 100))); };
+  $('ct-scale-n').onchange = () => { const v = Math.max(1, Math.round((calcNum($('ct-scale-n').value) || 100) * 100) / 100); $('ct-scale-n').value = v; $('ct-scale').value = v; upd((t) => (t.scale = v)); };
   $('ct-scaley').oninput = () => { $('ct-scaley-n').value = $('ct-scaley').value; upd((t) => (t.scaleY = parseFloat($('ct-scaley').value))); };
-  $('ct-scaley-n').onchange = () => { $('ct-scaley').value = $('ct-scaley-n').value; upd((t) => (t.scaleY = Math.max(1, parseFloat($('ct-scaley-n').value) || 100))); };
+  $('ct-scaley-n').onchange = () => { const v = Math.max(1, Math.round((calcNum($('ct-scaley-n').value) || 100) * 100) / 100); $('ct-scaley-n').value = v; $('ct-scaley').value = v; upd((t) => (t.scaleY = v)); };
   // type exact pixel size
   $('ct-px-w').onchange = () => {
     const f = activeFile();
     if (!f || !f.probe || !f.probe.width) return;
-    const wanted = Math.max(1, parseInt($('ct-px-w').value, 10) || 0);
+    const wanted = Math.max(1, Math.round(calcNum($('ct-px-w').value)) || 0);
     const base = clipBaseSize(f);
     f.transform.scale = Math.max(1, Math.round((wanted / base.bw) * 10000) / 100);
     refreshClipControls();
@@ -2222,7 +2274,7 @@ function bindClipControls() {
   $('ct-px-h').onchange = () => {
     const f = activeFile();
     if (!f || !f.probe || !f.probe.width) return;
-    const wanted = Math.max(1, parseInt($('ct-px-h').value, 10) || 0);
+    const wanted = Math.max(1, Math.round(calcNum($('ct-px-h').value)) || 0);
     const base = clipBaseSize(f);
     const pct = Math.max(1, Math.round((wanted / base.bh) * 10000) / 100);
     if (scaleLinked(f.transform)) {
@@ -2249,7 +2301,7 @@ function bindClipControls() {
     syncExportList();
   };
   $('ct-rot').oninput = () => { $('ct-rot-n').value = $('ct-rot').value; upd((t) => (t.rotation = parseFloat($('ct-rot').value))); };
-  $('ct-rot-n').onchange = () => { $('ct-rot').value = $('ct-rot-n').value; upd((t) => (t.rotation = parseFloat($('ct-rot-n').value) || 0)); };
+  $('ct-rot-n').onchange = () => { const v = Math.round((calcNum($('ct-rot-n').value) || 0) * 100) / 100; $('ct-rot-n').value = v; $('ct-rot').value = v; upd((t) => (t.rotation = v)); };
   $('ct-bright').oninput = () => { $('ct-bright-v').textContent = $('ct-bright').value; upd((t) => (t.brightness = parseInt($('ct-bright').value, 10) / 100)); };
   $('ct-contrast').oninput = () => { $('ct-contrast-v').textContent = $('ct-contrast').value; upd((t) => (t.contrast = parseInt($('ct-contrast').value, 10) / 100)); };
   $('ct-sat').oninput = () => { const v = parseInt($('ct-sat').value, 10) / 100; $('ct-sat-v').textContent = v.toFixed(2); upd((t) => (t.saturation = v)); };
@@ -2491,7 +2543,7 @@ async function startRender(filesOverride, optsOverride) {
   const def = Codecs.byId(codecId);
   const alpha = $('r-alpha').value;
   const depth = parseInt($('r-depth').value, 10);
-  const bitrateMbps = parseFloat($('r-bitrate').value) || null;
+  const bitrateMbps = calcNum($('r-bitrate').value) || null;
   const fps = clampInt($('r-fps').value, 1, 240);
   const imageDuration = clampInt($('r-dur').value, 1, 3600);
   const gpu = $('r-gpu').checked;
@@ -3244,7 +3296,7 @@ function bindUI() {
   $('tl-in-n').onchange = () => {
     const f = activeFile();
     if (!f || f.isImage) return;
-    const v = parseFloat($('tl-in-n').value);
+    const v = calcNum($('tl-in-n').value);
     if (Number.isNaN(v) || $('tl-in-n').value === '') {
       f.inSec = null;
     } else {
@@ -3256,7 +3308,7 @@ function bindUI() {
   $('tl-out-n').onchange = () => {
     const f = activeFile();
     if (!f || f.isImage) return;
-    const v = parseFloat($('tl-out-n').value);
+    const v = calcNum($('tl-out-n').value);
     if (Number.isNaN(v) || $('tl-out-n').value === '') {
       f.outSec = null;
     } else {
