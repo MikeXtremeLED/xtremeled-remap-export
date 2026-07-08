@@ -14,10 +14,10 @@
     { id: 'prores_hq', label: 'ProRes 422 HQ', ext: 'mov', alpha: [], depths: [10], group: 'ProRes' },
     { id: 'prores_4444', label: 'ProRes 4444', ext: 'mov', alpha: ['straight', 'only'], depths: [10], group: 'ProRes' },
     { id: 'dxv', label: 'DXV3 Normal Quality', ext: 'mov', alpha: [], depths: [8], group: 'DXV' },
-    { id: 'dxv_hq', label: 'DXV3 High Quality', ext: 'mov', alpha: [], depths: [8], group: 'DXV', unsupported: 'ffmpeg has no DXV HQ encoder (DXT5) — use Normal Quality or ProRes' },
+    { id: 'dxv_hq', label: 'DXV3 High Quality (HAP Q)', ext: 'mov', alpha: [], depths: [8], group: 'DXV', needsHap: true, note: 'Encoded as HAP Q — the same DXT5-YCoCg compression as DXV3 HQ, and Resolume plays it natively.' },
     { id: 'hap', label: 'HAP Standard', ext: 'mov', alpha: ['straight'], depths: [8], group: 'HAP' },
     { id: 'hap_q', label: 'HAP Q', ext: 'mov', alpha: [], depths: [8], group: 'HAP' },
-    { id: 'notchlc', label: 'Notch LC', ext: 'mov', alpha: [], depths: [10], group: 'Other', unsupported: 'ffmpeg can decode but not encode Notch LC — use HAP Q or ProRes' },
+    { id: 'notchlc', label: 'Notch LC', ext: 'mov', alpha: [], depths: [10], group: 'Other', unsupported: 'Notch LC is a closed codec — only Notch\'s own encoder/SDK can create it (ffmpeg is decode-only). Use HAP Q or ProRes instead.' },
     { id: 'hevc', label: 'HEVC / H.265', ext: 'mp4', alpha: [], depths: [8, 10, 12], bitrate: true, group: 'Delivery' },
     { id: 'h264', label: 'H.264 / AVC', ext: 'mp4', alpha: [], depths: [8], bitrate: true, group: 'Delivery' },
     { id: 'png', label: 'PNG still', ext: 'png', alpha: ['straight', 'only'], depths: [8, 16], still: true, group: 'Image' },
@@ -110,6 +110,7 @@
       case 'hap':
         return ['-c:v', 'hap', '-format', alpha === 'straight' ? 'hap_alpha' : 'hap'];
       case 'hap_q':
+      case 'dxv_hq': // DXV3 HQ is DXT5-YCoCg — delivered as HAP Q (same compression)
         return ['-c:v', 'hap', '-format', 'hap_q'];
       case 'hevc': {
         const pix = { 8: 'yuv420p', 10: 'yuv420p10le', 12: 'yuv420p12le' }[opt.depth || 8] || 'yuv420p';

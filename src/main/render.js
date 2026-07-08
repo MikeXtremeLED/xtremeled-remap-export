@@ -104,7 +104,7 @@ function getCapabilities(force) {
 function ffmpegForCodec(codecId) {
   const caps = getCapabilities();
   if (codecId === 'dxv') return caps.dxvPath;
-  if (codecId === 'hap' || codecId === 'hap_q') return caps.hapPath;
+  if (codecId === 'hap' || codecId === 'hap_q' || codecId === 'dxv_hq') return caps.hapPath;
   if (codecId === 'hevc') return caps.x265Path;
   return caps.proresPath;
 }

@@ -2370,7 +2370,7 @@ function buildCodecSelect() {
 function runtimeUnsupported(c) {
   if (!caps) return false;
   if (c.id === 'dxv' && !caps.hasDxv) return true;
-  if ((c.id === 'hap' || c.id === 'hap_q') && !caps.hasHap) return true;
+  if ((c.id === 'hap' || c.id === 'hap_q' || c.needsHap) && !caps.hasHap) return true;
   if (c.id === 'hevc' && !caps.hasX265) return true;
   return false;
 }
@@ -2397,6 +2397,7 @@ function refreshCodecUI() {
   $('r-gpu').disabled = !Codecs.gpuCapable(def.id);
   const notes = [];
   if (def.unsupported) notes.push(def.unsupported);
+  if (def.note) notes.push(def.note);
   if (def.id === 'dxv') notes.push('DXT1 — plays natively in Resolume.');
   if (def.sequence) notes.push('Frames are written into a new folder per export.');
   if (def.still) notes.push('One remapped frame at the current preview time — ideal for PowerPoint.');
