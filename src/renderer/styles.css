@@ -21,14 +21,20 @@ html, body {
   color: var(--text);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden;
+}
+
+/* Non-editable UI chrome: no text selection. Inputs stay fully editable —
+   note: a global user-select:none on <body> is a known cause of un-typable
+   inputs in Electron on Windows, so we scope it to the chrome instead. */
+#toolbar, #left, #right, #center, #rp-left, #rp-right, #rp-center,
+#statusbar, #rp-timeline, #rp-viewbar, .panel-title, .subtitle,
+.slice-item, .screen-row, .file-row, label, button {
   -webkit-user-select: none;
   user-select: none;
 }
-
-/* Form fields must always be selectable/editable (esp. on Windows) */
 input, textarea, select {
-  -webkit-user-select: text;
-  user-select: text;
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
 
 button {

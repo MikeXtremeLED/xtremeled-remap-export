@@ -3142,7 +3142,17 @@ function bindUI() {
 
   window.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+      // In text fields: ensure editing shortcuts work even if the platform menu
+      // doesn't wire them up (seen on Windows). Let all other keys type normally.
+      const meta2 = e.ctrlKey || e.metaKey;
+      if (meta2 && (e.target.type === 'text' || e.target.type === 'search' || tag === 'textarea')) {
+        const k = e.key.toLowerCase();
+        if (k === 'a') { e.preventDefault(); e.target.select(); }
+        // c / v / x fall through to Chromium's native clipboard handling
+      }
+      return;
+    }
     const meta = e.metaKey || e.ctrlKey;
     if (meta && e.key.toLowerCase() === 'z') {
       e.preventDefault();
