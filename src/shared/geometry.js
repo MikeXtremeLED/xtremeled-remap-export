@@ -201,8 +201,45 @@
     );
   }
 
+  // Resize a rect by dragging handle `k` ("nw","n","ne","e","se","s","sw","w")
+  // by (dx, dy). With keepRatio the original width/height ratio is preserved and
+  // the edges that are not being dragged stay put.
+  function resizeRect(r0, k, dx, dy, keepRatio) {
+    let { x, y, w, h } = r0;
+    if (k.includes('w')) { x = r0.x + dx; w = r0.w - dx; }
+    if (k.includes('e')) { w = r0.w + dx; }
+    if (k.includes('n')) { y = r0.y + dy; h = r0.h - dy; }
+    if (k.includes('s')) { h = r0.h + dy; }
+
+    if (keepRatio && r0.w > 0 && r0.h > 0) {
+      const ar = r0.w / r0.h;
+      const horiz = k.includes('w') || k.includes('e');
+      const vert = k.includes('n') || k.includes('s');
+      if (horiz && vert) {
+        // corner handle: the axis you moved most wins, the other follows
+        if (Math.abs(w / r0.w - 1) >= Math.abs(h / r0.h - 1)) h = w / ar;
+        else w = h * ar;
+      } else if (horiz) {
+        h = w / ar;
+      } else {
+        w = h * ar;
+      }
+      if (w < 1) { w = 1; h = w / ar; }
+      if (h < 1) { h = 1; w = h * ar; }
+      // the edges you are not dragging stay where they were
+      x = k.includes('w') ? r0.x + r0.w - w : r0.x;
+      y = k.includes('n') ? r0.y + r0.h - h : r0.y;
+      return { x: Math.round(x), y: Math.round(y), w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)) };
+    }
+
+    if (w < 1) { if (k.includes('w')) x = r0.x + r0.w - 1; w = 1; }
+    if (h < 1) { if (k.includes('n')) y = r0.y + r0.h - 1; h = 1; }
+    return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+  }
+
   return {
     intersect,
+    resizeRect,
     maskBBox,
     maskIsRect,
     rectToPoints,

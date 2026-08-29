@@ -267,7 +267,20 @@ select { width: auto; }
   padding: 8px 0 8px;
 }
 #left .panel-title, #rp-left .panel-title { padding: 10px 10px 6px; }
-.subtitle { color: var(--dim); font-size: 11px; margin: 10px 0 4px; }
+.subtitle { color: var(--dim); font-size: 11px; margin: 10px 0 4px; display: flex; align-items: center; gap: 8px; }
+/* aspect-ratio lock, sits inline in the "Output rect" subtitle */
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.6;
+  margin-left: auto;
+}
+.lock-btn svg { color: var(--dim); }
+.lock-btn.active { border-color: var(--accent); color: var(--accent); }
+.lock-btn.active svg { color: var(--accent); }
 .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .row label { min-width: 44px; color: var(--dim); }
 .row2 { display: flex; align-items: center; gap: 5px; margin: 6px 0; flex-wrap: wrap; }

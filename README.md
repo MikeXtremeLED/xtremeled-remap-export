@@ -50,7 +50,7 @@ remap the *content itself*, in advance.
 
 1. Load your **stageview render** (the video/image as designed on the full stage canvas).
 2. Set up the **input → output mapping** — the exact same slice principle as Resolume's
-   Advanced Output (or import your existing Resolume XML directly).
+   Advanced Output (or import your existing Resolume XML or Hippotizer CSV directly).
 3. Export. The content is cut, rotated, masked and re-placed into a ready-to-play output file.
 
 The result plays on **any simple playout device** — a laptop with QuickTime, a media player, even
@@ -76,8 +76,11 @@ waveform, live input/output preview, test pattern generator and a full codec mat
 
 - **Resolume-compatible XML** import & export — round-trips slices, input masks (polygons),
   rotation and flip. Multiple screens supported.
-- **Slice editor** — drag/resize with snapping, key-point masks, 90° rotations, flip (H/V),
-  split-into-rows for extreme screen sizes (e.g. 50 m × 1 m), undo/redo, reorder by dragging.
+- **Green Hippo Hippotizer CSV** import & export — read and write VideoMapper tile lists,
+  so a mapping can move straight between Hippotizer and Resolume.
+- **Slice editor** — drag/resize with snapping and an aspect-ratio lock, key-point masks,
+  90° rotations, flip (H/V), split-into-rows for extreme screen sizes (e.g. 50 m × 1 m),
+  undo/redo, reorder by dragging.
 - **Export codecs**: ProRes 422 Proxy/LT/422/HQ, ProRes 4444 (with/only alpha), **DXV3**,
   **HAP** Standard/Q, HEVC/H.265 (8/10/12-bit), H.264, PNG still / PNG sequence (8/16-bit),
   WAV audio extract (16/24/32-bit).
@@ -93,6 +96,35 @@ waveform, live input/output preview, test pattern generator and a full codec mat
 - **Watch folder** — drop renders in a folder and they're remapped automatically.
 - **GPU acceleration** (VideoToolbox on macOS) with automatic CPU fallback.
 - Native **ffmpeg** bundled for Intel Mac, Apple Silicon and Windows — no installation needed.
+
+## Working with other media servers
+
+| Format | Import | Export | Notes |
+| --- | --- | --- | --- |
+| Resolume Advanced Output `.xml` | ✅ | ✅ | Slices, polygon masks, rotation, flip, multiple screens |
+| Green Hippo Hippotizer VideoMapper `.csv` | ✅ | ✅ | Tile rects, rotation, flip, RGB levels, colour block index |
+
+Both live on the toolbar, and you can also just **drag a `.xml` or `.csv` onto the window**.
+
+### Hippotizer VideoMapper CSV
+
+The CSV is the [16-column VideoMapper tile
+list](https://www.manula.com/manuals/green-hippo/hippotizer-v4/4.9.4/en/topic/csv-import):
+input rect, input rotation and flip, output rect, output rotation, RGB levels and
+colour block index. A few things are worth knowing:
+
+- **A header row is optional.** Hippotizer's own spec has none, but exports that have been
+  through a spreadsheet usually do — both are read. Export writes the plain headerless form
+  the spec describes.
+- **A CSV holds no canvas or output resolution.** On import both are derived from how far the
+  tiles reach; correct them in the panel on the right if your real canvas is bigger than the
+  mapped area.
+- **A CSV holds one output.** A project with several screens exports one file per screen.
+- **Rotation is snapped to quarter turns.** Hippotizer allows any angle, this app maps in
+  90° steps; anything else is snapped and reported on import.
+- **Input masks are not written** — the CSV format has no place for them. Use XML if you
+  need masks to survive.
+- Blank rows and stray leftovers from a spreadsheet are skipped rather than rejected.
 
 ## Download
 
@@ -131,7 +163,7 @@ Both do the same thing — remove the download block. You only need to do this o
 
 1. **Mapping page** — set your input canvas to the stageview resolution (e.g. `10400×416` for a
    50×2 m P4.81 screen), add a screen (output) and create slices — or **Import XML** from
-   Resolume.
+   Resolume / **Import CSV** from Hippotizer.
 2. Check the mapping with a **test pattern** on the actual LED wall.
 3. **Export page** — add your stageview footage, tweak transform/trim if needed, pick a codec
    (DXV3 for Resolume, ProRes for quality, H.264 for PowerPoint/laptops) and hit **Start export**.
@@ -144,7 +176,7 @@ git clone https://github.com/MikeXtremeLED/xtremeled-remap-export.git
 cd xtremeled-remap-export
 npm install
 npm start          # run the app
-npm test           # geometry / XML / render test suite (28 checks with real ffmpeg renders)
+npm test           # geometry / XML / CSV / render test suite (45 checks with real ffmpeg renders)
 ```
 
 ### Build installers

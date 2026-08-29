@@ -1,0 +1,9 @@
+Input X,Input Y,Input X Size,Input Y Size,Input Rotation,Input Tile Flipped X,Input Tile Flipped Y,Output X,Output Y,Output X Size,Output Y Size,Output Rotation of Tile,Red Level,Green Level,Blue Level,Colour Block Index
+0,0,192,1536,0,FALSE,FALSE,0,0,192,1536,0,255,255,255,0
+768,0,192,1536,0,FALSE,FALSE,192,0,192,1536,0,255,255,255,1
+1536,0,192,1536,0,FALSE,FALSE,384,0,192,1536,0,255,255,255,2
+2304,0,192,1536,0,FALSE,FALSE,576,0,192,1536,0,255,255,255,3
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+2496,,,,,,,,,,,,,,,

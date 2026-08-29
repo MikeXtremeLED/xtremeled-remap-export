@@ -13,6 +13,8 @@ let selScreenId = null; // selected screen id (tree selection when no slice sele
 let activeScreenId = null;
 let caps = null;
 let maskEdit = false;
+// Keep aspect ratio while scaling a slice in the Output view (toolbar lock or Shift).
+let outLock = localStorage.getItem('xre:outlock') === '1';
 const refImgs = { input: null, output: null };
 const vt = {
   input: { scale: 0.1, ox: 50, oy: 50 },
@@ -33,6 +35,10 @@ const HANDLES = [
   { k: 'e', fx: 1, fy: 0.5 }, { k: 'se', fx: 1, fy: 1 }, { k: 's', fx: 0.5, fy: 1 },
   { k: 'sw', fx: 0, fy: 1 }, { k: 'w', fx: 0, fy: 0.5 },
 ];
+const LOCK_PATHS = {
+  on: 'M4 9h12v9H4z M7 9V6a3 3 0 0 1 6 0v3h-1.8V6a1.2 1.2 0 0 0-2.4 0v3H7z',
+  off: 'M4 9h12v9H4z M11 9V6a1.2 1.2 0 0 1 2.4 0v1.6H15V6a3 3 0 0 0-6 0v3h2z',
+};
 const HANDLE_CURSORS = {
   nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize',
   n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize',
@@ -726,15 +732,12 @@ function snapResize(r, k, v) {
 }
 
 // ---------------- mouse (editor) ----------------
-function applyResize(r0, k, dx, dy) {
-  let { x, y, w, h } = r0;
-  if (k.includes('w')) { x = r0.x + dx; w = r0.w - dx; }
-  if (k.includes('e')) { w = r0.w + dx; }
-  if (k.includes('n')) { y = r0.y + dy; h = r0.h - dy; }
-  if (k.includes('s')) { h = r0.h + dy; }
-  if (w < 1) { if (k.includes('w')) x = r0.x + r0.w - 1; w = 1; }
-  if (h < 1) { if (k.includes('n')) y = r0.y + r0.h - 1; h = 1; }
-  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+// Resize maths (incl. the aspect-ratio lock) lives in Geometry so it can be tested.
+const applyResize = (r0, k, dx, dy, keepRatio) => Geometry.resizeRect(r0, k, dx, dy, keepRatio);
+
+// Aspect ratio is kept when the Output-rect lock is on (Output view) or Shift is held.
+function keepAspectNow(e) {
+  return !!((e && e.shiftKey) || (outLock && view === 'output'));
 }
 
 function insertMaskPoint(s, wx, wy) {
@@ -892,7 +895,11 @@ function onMouseMove(e) {
     r.x = Math.round(nr.x);
     r.y = Math.round(nr.y);
   } else if (drag.mode === 'resize') {
-    Object.assign(sliceRect(sel, view), snapResize(applyResize(drag.orig, drag.k, dx, dy), drag.k, view));
+    const keep = keepAspectNow(e);
+    const nr = applyResize(drag.orig, drag.k, dx, dy, keep);
+    // free-form resize snaps to neighbouring edges; a locked ratio must not be
+    // broken by that, so snapping is skipped while the ratio is held
+    Object.assign(sliceRect(sel, view), keep ? nr : snapResize(nr, drag.k, view));
   }
   refreshProps();
   refreshSliceList();
@@ -1056,6 +1063,15 @@ function refreshScreenSelectors() {
   rpsel.classList.toggle('hidden', !(project.screens.length > 1 && rp.viewMode === 'output'));
 }
 
+// Write a value into a form field, but never into the one the user is typing in.
+// Overwriting the focused field is the classic cause of "the box won't let me
+// change the value" — reported repeatedly on Windows.
+function setField(id, val) {
+  const el = $(id);
+  if (!el || el === document.activeElement) return;
+  el.value = val;
+}
+
 function refreshProps() {
   const s = selected();
   const scr = selectedScreen();
@@ -1063,13 +1079,14 @@ function refreshProps() {
   $('slice-props').classList.toggle('hidden', !s);
   $('screen-props').classList.toggle('hidden', !scr);
   if (scr) {
-    $('scr-name').value = scr.name;
-    $('out-w').value = scr.width;
-    $('out-h').value = scr.height;
+    setField('scr-name', scr.name);
+    setField('out-w', scr.width);
+    setField('out-h', scr.height);
     const n = project.slices.filter((x) => sliceScreenId(x) === scr.id).length;
     $('scr-info').textContent = `${n} slice${n === 1 ? '' : 's'} on this screen`;
   }
-  const set = (id, val) => { $(id).value = val; };
+  const set = setField;
+  refreshOutLockBtn();
   if (!s) {
     $('mask-edit').checked = false;
     return;
@@ -1095,10 +1112,18 @@ function refreshProps() {
 }
 
 function refreshProjectFields() {
-  $('p-name').value = project.name;
-  $('in-w').value = project.input.width;
-  $('in-h').value = project.input.height;
+  setField('p-name', project.name);
+  setField('in-w', project.input.width);
+  setField('in-h', project.input.height);
   refreshScreenSelectors();
+}
+
+function refreshOutLockBtn() {
+  const btn = $('sl-out-lock');
+  if (!btn) return;
+  btn.classList.toggle('active', outLock);
+  $('lock-path').setAttribute('d', outLock ? LOCK_PATHS.on : LOCK_PATHS.off);
+  $('lock-label').textContent = outLock ? 'Locked' : 'Free';
 }
 
 function refreshRefPanel() {
@@ -2784,6 +2809,84 @@ async function importXmlPath(p) {
   }
 }
 
+async function importCsv() {
+  const paths = await api.openDialog({
+    title: 'Import Hippotizer VideoMapper CSV',
+    filters: [{ name: 'VideoMapper CSV', extensions: ['csv'] }],
+  });
+  if (!paths.length) return;
+  await importCsvPath(paths[0]);
+}
+
+async function importCsvPath(path) {
+  try {
+    const text = await api.readFileText(path);
+    const pp = await api.pathParse(path);
+    const proj = Hippo.parseCsv(text, { name: pp.base || 'Hippotizer CSV import' });
+    const warnings = proj.warnings || [];
+    delete proj.warnings;
+    proj.refs = { input: null, output: null };
+    proj.slices.forEach((s) => (s.id = uid()));
+    pushHistory();
+    await switchToProject(proj);
+    const sc = proj.screens[0];
+    const lines = [
+      `Imported ${proj.slices.length} tile${proj.slices.length === 1 ? '' : 's'}.`,
+      '',
+      `Input canvas: ${proj.input.width} × ${proj.input.height}`,
+      `Output: ${sc.width} × ${sc.height}`,
+      '',
+      'A VideoMapper CSV holds no canvas or output resolution, so both were',
+      'derived from the tiles. Correct them on the right if your real canvas',
+      'or output is larger than the mapped area.',
+    ];
+    if (warnings.length) lines.push('', ...warnings.map((w) => '• ' + w));
+    alert(lines.join('\n'));
+  } catch (err) {
+    alert('CSV import failed: ' + (err.message || err));
+  }
+}
+
+async function exportCsv() {
+  const screens = project.screens && project.screens.length ? project.screens : [];
+  const target = await api.saveDialog({
+    title: 'Export as Hippotizer VideoMapper CSV',
+    defaultPath: (project.name || 'mapping').replace(/[/\\:]/g, '-') + '.csv',
+    filters: [{ name: 'VideoMapper CSV', extensions: ['csv'] }],
+  });
+  if (!target) return;
+
+  const written = [];
+  const notes = [];
+  if (screens.length > 1) {
+    // one CSV is exactly one output, so a multi-screen project becomes one file per screen
+    const pp = await api.pathParse(target);
+    for (const sc of screens) {
+      const file = await api.pathJoin(pp.dir, `${pp.base}-${sanitizeName(sc.name)}${pp.ext || '.csv'}`);
+      await api.writeFileText(file, Hippo.exportCsv(project, sc.id));
+      written.push(baseName(file));
+      notes.push(...Hippo.exportNotes(project, sc.id));
+    }
+  } else {
+    const sid = screens.length ? screens[0].id : null;
+    await api.writeFileText(target, Hippo.exportCsv(project, sid));
+    written.push(baseName(target));
+    notes.push(...Hippo.exportNotes(project, sid));
+  }
+
+  if (written.length > 1 || notes.length) {
+    const lines = [];
+    if (written.length > 1) {
+      lines.push(`A CSV holds one output, so ${written.length} files were written — one per screen:`, ...written.map((w) => '• ' + w));
+    }
+    if (notes.length) {
+      if (lines.length) lines.push('');
+      lines.push(...[...new Set(notes)].map((n) => '• ' + n));
+    }
+    alert(lines.join('\n'));
+  }
+}
+
 async function exportXml() {
   const p = await api.saveDialog({
     title: 'Export as Resolume XML',
@@ -2863,6 +2966,8 @@ function bindUI() {
   $('btn-save-proj').onclick = saveProject;
   $('btn-import-xml').onclick = importXml;
   $('btn-export-xml').onclick = exportXml;
+  $('btn-import-csv').onclick = importCsv;
+  $('btn-export-csv').onclick = exportCsv;
 
   // Duplicate / Delete apply to the tree selection (slice or screen)
   $('btn-dup-slice').onclick = () => {
@@ -2998,8 +3103,15 @@ function bindUI() {
       pushHistory();
       const r = which === 'in' ? s.in : s.out;
       const isSize = key === 'w' || key === 'h';
+      const was = { w: r.w, h: r.h };
       r[key] = clampInt($(id).value, isSize ? 1 : -100000, 100000);
+      if (isSize && which === 'out' && outLock && was.w > 0 && was.h > 0) {
+        const ar = was.w / was.h;
+        if (key === 'w') r.h = Math.max(1, Math.round(r.w / ar));
+        else r.w = Math.max(1, Math.round(r.h * ar));
+      }
       $(id).value = r[key];
+      refreshProps();
       refreshSliceList();
       draw();
       markDirty();
@@ -3028,6 +3140,12 @@ function bindUI() {
     draw();
     markDirty();
   };
+  $('sl-out-lock').onclick = () => {
+    outLock = !outLock;
+    localStorage.setItem('xre:outlock', outLock ? '1' : '0');
+    refreshOutLockBtn();
+  };
+
   $('sl-flip').onclick = () => {
     const s = selected();
     if (!s) return;
@@ -3096,7 +3214,7 @@ function bindUI() {
   window.addEventListener('mousemove', (e) => {
     if (drag) {
       const rect = canvas.getBoundingClientRect();
-      onMouseMove({ offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, clientX: e.clientX, clientY: e.clientY });
+      onMouseMove({ offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey });
     }
   });
   canvas.addEventListener('mousemove', (e) => { if (!drag) onMouseMove(e); });
@@ -3139,6 +3257,44 @@ function bindUI() {
       t.dispatchEvent(new Event('input', { bubbles: true }));
     }
   });
+
+  // ---- Windows text-field hardening -------------------------------------
+  // Reports keep coming in that number fields "won't take the cursor" on
+  // Windows. Two safety nets, both no-ops when things already work:
+  //   1. after a click in a field, make sure focus actually landed there;
+  //   2. select the current value on focus, so typing replaces it right away
+  //      (a click-drag inside the field still selects by hand).
+  let reselect = null;
+  const editable = (el) =>
+    !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') &&
+    !['checkbox', 'radio', 'range', 'button', 'file'].includes(el.type);
+
+  document.addEventListener('pointerdown', (e) => {
+    const el = e.target;
+    if (!editable(el)) return;
+    setTimeout(() => {
+      if (document.activeElement !== el && document.body.contains(el)) {
+        try { el.focus(); } catch (_) { /* ignore */ }
+      }
+    }, 0);
+  }, true);
+
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (!editable(el) || !el.classList.contains('num')) { reselect = null; return; }
+    try { el.select(); } catch (_) { /* ignore */ }
+    reselect = el;
+  });
+  document.addEventListener('focusout', () => { reselect = null; });
+  document.addEventListener('mouseup', (e) => {
+    const el = reselect;
+    reselect = null;
+    // the click that gave focus also places a caret; restore the select-all
+    // unless the user deliberately dragged out a selection
+    if (el && el === e.target && el.selectionStart === el.selectionEnd) {
+      try { el.select(); } catch (_) { /* ignore */ }
+    }
+  }, true);
 
   window.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
@@ -3198,10 +3354,12 @@ function bindUI() {
     if (!files.length) return;
     const paths = files.map((f) => api.getPathForFile(f)).filter(Boolean);
     const xmls = paths.filter((p) => extOf(p) === 'xml');
+    const csvs = paths.filter((p) => extOf(p) === 'csv');
     const projs = paths.filter((p) => ['xreproj', 'json'].includes(extOf(p)));
     const imgs = paths.filter(isImagePath);
     const vids = paths.filter((p) => VIDEO_EXTS.includes(extOf(p)));
     if (xmls.length) return importXmlPath(xmls[0]);
+    if (csvs.length) return importCsvPath(csvs[0]);
     if (projs.length) {
       try {
         pushHistory();
