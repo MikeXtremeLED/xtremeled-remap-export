@@ -28,6 +28,11 @@
       <button id="btn-export-xml" title="Export Resolume-compatible XML">Export XML</button>
     </div>
     <div class="tb-sep"></div>
+    <div class="tb-group">
+      <button id="btn-import-csv" title="Import Green Hippo Hippotizer VideoMapper CSV">Import CSV</button>
+      <button id="btn-export-csv" title="Export Hippotizer-compatible VideoMapper CSV">Export CSV</button>
+    </div>
+    <div class="tb-sep"></div>
     <div class="tabs" id="view-tabs">
       <button id="tab-input" class="tab active">Input</button>
       <button id="tab-output" class="tab">Output</button>
@@ -99,7 +104,7 @@
         <canvas id="editor"></canvas>
         <div id="statusbar">
           <span id="status-pos"></span>
-          <span id="status-hint">Drag = move · Handles = resize · Scroll = pan · ⌘/Ctrl+scroll = zoom · ⌘Z undo</span>
+          <span id="status-hint">Drag = move · Handles = resize · Shift = keep ratio · Scroll = pan · ⌘/Ctrl+scroll = zoom · ⌘Z undo</span>
         </div>
       </div>
 
@@ -139,7 +144,13 @@
             </select>
           </div>
 
-          <div class="subtitle">Output rect</div>
+          <div class="subtitle">
+            Output rect
+            <button id="sl-out-lock" class="lock-btn" title="Keep aspect ratio when scaling this slice (hold Shift while dragging a corner for the same effect)">
+              <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true"><path id="lock-path" d="" fill="currentColor"/></svg>
+              <span id="lock-label">Free</span>
+            </button>
+          </div>
           <div class="row4">
             <label>X</label><input type="text" inputmode="text" id="sl-out-x" class="num" />
             <label>Y</label><input type="text" inputmode="text" id="sl-out-y" class="num" />
@@ -359,6 +370,7 @@
 
   <script src="../shared/sxml.js"></script>
   <script src="../shared/resolume.js"></script>
+  <script src="../shared/hippo.js"></script>
   <script src="../shared/geometry.js"></script>
   <script src="../shared/codecs.js"></script>
   <script src="app.js"></script>
