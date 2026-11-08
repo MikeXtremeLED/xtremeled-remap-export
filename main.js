@@ -1,9 +1,11 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, powerSaveBlocker, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const renderMod = require('./src/main/render');
+const { checkOutputDir } = require('./src/main/errors');
+const ExportPlan = require('./src/shared/exportplan');
 const Files = require('./src/main/output-files');
 const Store = require('./src/main/file-store');
 const Outputs = require('./src/shared/outputs');
@@ -176,6 +178,7 @@ function shootTutorial() {
     }
     await wait(500);
     await js('window.__demoApi.rpInput()');
+    await js('window.__demoApi.openPanels()'); // the tutorial points at settings inside the folded sections
     await wait(400);
     await shot('export-input');
     rects.export = await js('window.__demoApi.rects()');
@@ -410,6 +413,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'win32') app.setAppUserModelId('nl.xtremeled.remapexport'); // Windows shows no notifications without it
   if (makeIconArg) return makeIcon();
   if (makeHeroArg) return makeHero();
   if (makePosterArg) return makePoster();
@@ -521,8 +525,49 @@ ipcMain.handle('shell:showInFolder', (e, p) => {
   shell.showItemInFolder(p);
 });
 
+ipcMain.handle('shell:openFolder', async (e, dir) => {
+  // The path can come from a project file: openPath on a file would launch it
+  if (!fs.statSync(dir).isDirectory()) throw new Error('Not a folder');
+  const problem = await shell.openPath(dir);
+  if (problem) throw new Error(problem);
+});
+
 ipcMain.handle('shell:openExternal', (e, url) => {
   if (/^https?:\/\//.test(url)) shell.openExternal(url);
+});
+
+ipcMain.handle('app:paths', () => ({ temp: os.tmpdir(), documents: app.getPath('documents') }));
+
+// For each folder: can we write there, how much room is left and on which disk.
+ipcMain.handle('output:folders', async (e, dirs) => Promise.all(dirs.map(async (dir) => {
+  const problem = checkOutputDir(dir);
+  let freeBytes = null;
+  try {
+    const st = await fs.promises.statfs(dir);
+    freeBytes = st.bavail * st.bsize;
+  } catch (err) {
+    /* gone or not supported here: the size line then leaves the free space out */
+  }
+  return { dir, problem: problem ? problem.message : null, freeBytes, volume: ExportPlan.volumeLabel(dir, process.platform) };
+})));
+
+ipcMain.on('app:taskbar-progress', (e, fraction) => {
+  const target = BrowserWindow.fromWebContents(e.sender);
+  if (target && !target.isDestroyed()) target.setProgressBar(fraction);
+});
+
+// Only when the app is not in front: the toast is for someone working in another program.
+// Kept in a variable so it is not collected before it can be clicked.
+let exportNotice = null;
+ipcMain.on('app:export-notice', (e, notice) => {
+  const target = BrowserWindow.fromWebContents(e.sender);
+  if (!target || target.isDestroyed() || target.isFocused() || !Notification.isSupported()) return;
+  exportNotice = new Notification({ title: notice.title, body: notice.body });
+  exportNotice.on('click', () => {
+    if (notice.showPath) shell.showItemInFolder(notice.showPath);
+    if (!target.isDestroyed()) target.show();
+  });
+  exportNotice.show();
 });
 
 ipcMain.handle('path:parse', (e, p) => ({
@@ -542,9 +587,12 @@ ipcMain.handle('render:start', async (e, payload) => {
     return await renderMod.startBatch(BrowserWindow.fromWebContents(e.sender), payload);
   } finally {
     powerSaveBlocker.stop(sleepBlock);
+    const done = BrowserWindow.fromWebContents(e.sender);
+    if (done && !done.isDestroyed()) done.setProgressBar(-1); // also when the page never got to say so
   }
 });
 ipcMain.handle('render:cancel', () => renderMod.cancel());
+ipcMain.handle('estimate:sample', (e, payload) => renderMod.sampleOutputSize(payload));
 ipcMain.handle('render:existing', (e, targets) => renderMod.existingOutputs(targets));
 ipcMain.handle('preview:probe', (e, src) => {
   const caps = renderMod.getCapabilities();

@@ -165,8 +165,8 @@ Both do the same thing — remove the download block. You only need to do this o
    50×2 m P4.81 screen), add a screen (output) and create slices — or **Import XML** from
    Resolume / **Import CSV** from Hippotizer.
 2. Check the mapping with a **test pattern** on the actual LED wall.
-3. **Export page** — add your stageview footage, tweak transform/trim if needed, pick a codec
-   (DXV3 for Resolume, ProRes for quality, H.264 for PowerPoint/laptops) and hit **Start export**.
+3. **Export page** — add your stageview footage, tweak transform/trim if needed, choose where it
+   **Plays back on** and hit **Export** (the button shows how many clips, e.g. **Export 3 clips**).
 4. Play the exported file full-screen on the output — done.
 
 ## Run from source

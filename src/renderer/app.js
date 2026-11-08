@@ -1700,18 +1700,22 @@ function askExisting(names, canSkip) {
 }
 
 // Ask how to export multiple screens: separate / merged / both
-function askOutputMode() {
+function askOutputMode(clipCount) {
   return new Promise((resolve) => {
     const remembered = localStorage.getItem('xre:outmode') || 'separate';
+    const counts = ExportPlan.outputCounts(clipCount, project.screens.length);
+    const def = currentCodec();
+    const noun = def.sequence ? 'folder' : 'file';
+    const gives = (n) => `<span class="dim">(${ExportPlan.plural(n, noun)})</span>`;
     openModal(`
       <div class="modal" style="width:430px">
         <div class="modal-head">Multiple outputs<button class="close-x" id="m-close">✕</button></div>
         <div class="modal-body">
           <div class="note">This project has ${project.screens.length} screens. How do you want to export them?</div>
           <div class="radio-col">
-            <label><input type="radio" name="m-outmode" value="separate" ${remembered === 'separate' ? 'checked' : ''} /> Separate file per screen</label>
-            <label><input type="radio" name="m-outmode" value="merged" ${remembered === 'merged' ? 'checked' : ''} /> One merged video (screens side by side)</label>
-            <label><input type="radio" name="m-outmode" value="both" ${remembered === 'both' ? 'checked' : ''} /> Both</label>
+            <label><input type="radio" name="m-outmode" value="separate" ${remembered === 'separate' ? 'checked' : ''} /> Separate file per screen ${gives(counts.separate)}</label>
+            <label><input type="radio" name="m-outmode" value="merged" ${remembered === 'merged' ? 'checked' : ''} /> One merged video, screens side by side ${gives(counts.merged)}</label>
+            <label><input type="radio" name="m-outmode" value="both" ${remembered === 'both' ? 'checked' : ''} /> Both ${gives(counts.both)}</label>
           </div>
         </div>
         <div class="modal-foot">
@@ -1831,11 +1835,24 @@ async function saveTestPattern() {
 }
 
 // ---------------- export page ----------------
+const STATUS_ICONS = {
+  done: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M2.5 7.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  warn: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M7 2.2l5.2 9.4H1.8L7 2.2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 6v2.6M7 10.2v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  fail: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  run: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" stroke-opacity="0.3" stroke-width="2"/><path d="M7 1.8a5.2 5.2 0 0 1 3.4 9.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  wait: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 4.6V7l1.7 1.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+};
+const STATUS_TITLES = { done: 'Exported', warn: 'Exported with a warning', fail: 'Failed', run: 'Exporting', wait: 'Waiting' };
+const TRIM_ICON = '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M2 3h3M2 9h3M5 3l5 6M5 9l5-6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
 const rp = {
   files: [], // {path, isImage, probe, transform, frameImg, frameTime, curTime, selected, inSec, outSec}
   activeIndex: -1,
-  destDir: null,
+  destDir: null, // null = next to each clip
+  destProblem: null, // why the chosen output folder cannot be used right now
   running: false,
+  clock: null, // the running batch: see beginExportUI
+  jobFiles: [],
+  jobStates: [],
   cancelRequested: false,
   retryTimers: new Set(),
   viewMode: 'input',
@@ -1850,6 +1867,7 @@ const rp = {
 let rpCanvas, rpCtx;
 let frameTimer = null;
 let rpDrag = null; // clip dragging / timeline dragging
+let appPaths = null; // {temp, documents}
 
 function activeFile() {
   return rp.files[rp.activeIndex] || null;
@@ -1865,6 +1883,9 @@ function syncExportList() {
     stretchOk: f.stretchOk || null,
   }));
   markDirty();
+  refreshActiveRowLength();
+  refreshPanelDots();
+  scheduleEstimate();
 }
 
 function loadExportListFromProject() {
@@ -2172,21 +2193,29 @@ function refreshFileList() {
     cb.addEventListener('change', () => {
       f.selected = cb.checked;
       updateStartButton();
+      refreshDestUI();
       syncExportList();
     });
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.textContent = f.isImage ? 'IMG' : 'VID';
+    const st = document.createElement('span');
+    st.className = `st ${f.exportState || ''}`;
+    st.innerHTML = STATUS_ICONS[f.exportState] || '';
+    st.title = STATUS_TITLES[f.exportState] || '';
     const nm = document.createElement('span');
     nm.className = 'nm';
-    nm.title = f.path;
-    nm.textContent = baseName(f.path);
+    nm.title = [f.path, f.probe && f.probe.width ? `${f.probe.width}×${f.probe.height}` : ''].filter(Boolean).join('\n');
+    const [headText, tailText] = ExportPlan.splitMiddle(baseName(f.path));
+    const head = document.createElement('span');
+    head.className = 'head';
+    head.textContent = headText;
+    const tail = document.createElement('span');
+    tail.className = 'tail';
+    tail.textContent = tailText;
+    nm.append(head, tail);
     const sz = document.createElement('span');
-    sz.className = 'sz';
-    sz.textContent = f.probe && f.probe.width ? `${f.probe.width}×${f.probe.height}` : '';
+    sz.dataset.len = String(i);
+    fillRowLength(sz, f);
     const stretched = footageStretch(f);
-    sz.classList.toggle('warn', !!stretched);
-    row.append(cb, tag, nm, sz);
+    row.append(cb, st, nm, sz);
     if (f.missing) {
       const missingTag = document.createElement('span');
       missingTag.className = 'tag missing-tag';
@@ -2220,11 +2249,37 @@ function refreshFileList() {
   $('rp-missing-line').textContent = `${missing} file${missing === 1 ? '' : 's'} missing`;
   $('rp-missing-line').classList.toggle('hidden', !missing);
   updateStartButton();
+  refreshDestUI();
   $('rp-clip-name').textContent = activeFile() ? baseName(activeFile().path) : 'no selection';
   // keep the "image footage" settings row in sync with the list contents
   const anyImage = rp.files.some((f) => f.isImage);
   const def = currentCodec();
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
+}
+
+// The table's length cell: the trimmed length, in orange when a trim is set
+function fillRowLength(sz, f) {
+  sz.className = 'sz';
+  if (f.isImage) {
+    sz.textContent = 'still';
+    return;
+  }
+  const full = fileDuration(f);
+  if (!full) {
+    sz.textContent = '';
+    return;
+  }
+  const trimmed = ExportPlan.isTrimmed(f.inSec, f.outSec);
+  sz.textContent = ExportPlan.formatClock(ExportPlan.trimmedSeconds(full, f.inSec, f.outSec));
+  sz.classList.toggle('trimmed', trimmed);
+  sz.title = trimmed ? `Trimmed from ${ExportPlan.formatClock(full)}: in ${ExportPlan.formatClock(f.inSec || 0)}, out ${ExportPlan.formatClock(f.outSec != null ? f.outSec : full)}` : '';
+  if (trimmed) sz.insertAdjacentHTML('afterbegin', TRIM_ICON);
+}
+
+function refreshActiveRowLength() {
+  const f = activeFile();
+  const sz = f && document.querySelector(`#rp-files .sz[data-len="${rp.activeIndex}"]`);
+  if (sz) fillRowLength(sz, f);
 }
 
 // null, or the footage and canvas sizes when this file would be resized to the canvas
@@ -2363,7 +2418,12 @@ async function checkBeforeExport(files, isAuto, notes) {
 function updateStartButton() {
   const ticked = rp.files.filter((f) => f.selected !== false);
   const skipped = ticked.filter((f) => f.missing).length;
-  $('r-start').disabled = ticked.length === skipped || rp.running;
+  const state = ExportPlan.startState({ total: rp.files.length, ticked: ticked.length, missing: skipped, running: rp.running, destProblem: rp.destProblem });
+  $('r-start').disabled = state.disabled;
+  $('r-start').textContent = state.label;
+  $('r-start').title = state.reason;
+  $('r-start-why').textContent = state.reason;
+  $('r-start-why').classList.toggle('hidden', !state.reason);
   $('r-missing-note').textContent = `${skipped} missing file${skipped === 1 ? '' : 's'} will be skipped`;
   $('r-missing-note').classList.toggle('hidden', !skipped);
 }
@@ -2393,12 +2453,6 @@ async function addFootage(paths, opts) {
       f.probe = null;
     }
   }
-  if (!rp.destDir && rp.files.length) {
-    const pp = await api.pathParse(rp.files[0].path);
-    rp.destDir = pp.dir;
-    $('r-dest').textContent = rp.destDir;
-    updateWatchConflict();
-  }
   syncExportList();
   if ((rp.activeIndex < 0 || (opts && opts.select)) && firstNew >= 0) {
     selectFile(firstNew);
@@ -2414,6 +2468,7 @@ function selectFile(i) {
   const f = activeFile();
   refreshFileList();
   refreshClipControls();
+  openEditedPanels();
   layoutTimeline();
   if (f) {
     fetchFrame(true);
@@ -2821,6 +2876,8 @@ function refreshClipControls() {
   const f = activeFile();
   const tr = f ? f.transform : Geometry.defaultTransform();
   $('rp-clip-section').style.opacity = f ? 1 : 0.4;
+  $('rp-color-section').style.opacity = f ? 1 : 0.4;
+  refreshPanelDots();
   refreshClipInfo();
   refreshPixelCheck();
   $('ct-mode').value = tr.mode;
@@ -3047,8 +3104,13 @@ function buildCodecSelect() {
         '</optgroup>'
     )
     .join('');
-  sel.value = prev && Codecs.byId(prev) ? prev : 'prores_hq';
+  const usable = (id) => {
+    const c = Codecs.byId(id);
+    return !!c && !c.unsupported && !runtimeUnsupported(c);
+  };
+  sel.value = prev && usable(prev) ? prev : ExportPlan.defaultCodec(usable);
   if (!sel.value) sel.value = 'prores_hq';
+  refreshTargets();
 }
 
 function runtimeUnsupported(c) {
@@ -3094,12 +3156,15 @@ function refreshCodecUI() {
   }
   if (!def.audioOnly) notes.push(...autoPadNotes());
   $('r-codec-note').textContent = notes.join(' ');
+  refreshTargets();
+  refreshDestUI();
   refreshPixelCheck();
   renderPreflight();
   // still settings apply when image footage is exported to a video codec
   const anyImage = rp.files.some((f) => f.isImage);
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
   updateStartButton();
+  scheduleEstimate();
 }
 
 function gpuActive() {
@@ -3173,6 +3238,348 @@ async function sameAsSource() {
   refreshCodecUI();
   const padNotes = Codecs.byId($('r-codec').value).audioOnly ? [] : autoPadNotes();
   $('r-codec-note').textContent = [m.note, ...padNotes].join(' ');
+  exportSettingsChanged();
+}
+
+// ---------------- plays back on ----------------
+function buildTargetCards() {
+  const host = $('r-targets');
+  host.innerHTML = '';
+  ExportPlan.TARGETS.forEach((t) => {
+    const b = document.createElement('button');
+    b.className = 'target';
+    b.dataset.codec = t.codec;
+    const title = document.createElement('b');
+    title.textContent = t.title;
+    const chip = document.createElement('span');
+    chip.className = 'codec';
+    chip.textContent = t.chip;
+    const hint = document.createElement('span');
+    hint.className = 'hint';
+    hint.textContent = t.hint;
+    b.append(title, chip, hint);
+    b.onclick = () => {
+      $('r-codec').value = t.codec;
+      refreshCodecUI();
+      exportSettingsChanged();
+    };
+    host.appendChild(b);
+  });
+}
+
+// The cards follow the codec; a codec picked under Advanced that has no card is named instead
+function refreshTargets() {
+  const host = $('r-targets');
+  if (!host || !host.children.length) return;
+  const id = $('r-codec').value;
+  [...host.children].forEach((b) => {
+    const def = Codecs.byId(b.dataset.codec);
+    const unavailable = !!(def && (def.unsupported || runtimeUnsupported(def)));
+    b.disabled = unavailable;
+    b.title = unavailable ? 'Not available in this ffmpeg build.' : '';
+    b.classList.toggle('selected', b.dataset.codec === id);
+  });
+  const custom = $('r-target-custom');
+  const def = Codecs.byId(id);
+  custom.classList.toggle('hidden', !!ExportPlan.targetForCodec(id));
+  custom.textContent = def ? `Set under Advanced: ${def.label}` : '';
+}
+
+// ---------------- export settings (kept in the project) ----------------
+function captureExportSettings() {
+  return {
+    codec: $('r-codec').value,
+    alpha: $('r-alpha').value,
+    depth: parseInt($('r-depth').value, 10),
+    bitrate: $('r-bitrate').value,
+    fps: clampInt($('r-fps').value, 1, 240),
+    dur: clampInt($('r-dur').value, 1, 3600),
+    destDir: rp.destDir,
+  };
+}
+
+function lastUsedSettings() {
+  if (DEMO_MODE) return {};
+  try {
+    return JSON.parse(localStorage.getItem('xre:exportdefaults')) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// Called for changes the user makes; loading a project never counts as one
+function exportSettingsChanged() {
+  project.exportSettings = captureExportSettings();
+  if (!DEMO_MODE) {
+    try {
+      localStorage.setItem('xre:exportdefaults', JSON.stringify(project.exportSettings));
+    } catch (e) { /* the next change tries again */ }
+  }
+  markDirty();
+  refreshDestUI();
+  updateStartButton();
+  scheduleEstimate();
+}
+
+function applyProjectExportSettings() {
+  const s = ExportPlan.resolveSettings(project.exportSettings, lastUsedSettings());
+  const def = s.codec ? Codecs.byId(s.codec) : null;
+  if (def && !def.unsupported && !runtimeUnsupported(def)) $('r-codec').value = s.codec;
+  refreshCodecUI();
+  if (s.alpha) $('r-alpha').value = s.alpha;
+  if (s.depth) $('r-depth').value = String(s.depth);
+  if (s.bitrate !== undefined) $('r-bitrate').value = s.bitrate;
+  if (s.fps) $('r-fps').value = String(s.fps);
+  if (s.dur) $('r-dur').value = String(s.dur);
+  rp.destDir = s.destDir || null;
+  rp.destProblem = null;
+  rp.destFromProject = s.folderFromProject;
+  refreshCodecUI();
+  updateWatchConflict();
+  checkDestFolder();
+}
+
+function setDestDir(dir) {
+  rp.destDir = dir;
+  rp.destProblem = null;
+  rp.destFromProject = true;
+  updateWatchConflict();
+  exportSettingsChanged();
+  checkDestFolder();
+}
+
+// A saved folder can be on a drive that is not connected. A folder the project asks for then
+// holds up Start, so nothing lands somewhere else without notice; a remembered default from
+// another project simply falls back to next to the footage.
+let destCheck = 0;
+async function checkDestFolder() {
+  const dir = rp.destDir;
+  const ticket = ++destCheck;
+  if (!dir) {
+    setDestProblem(null);
+    return;
+  }
+  let info;
+  try {
+    [info] = await api.outputFolders([dir]);
+  } catch (e) {
+    return; // can't tell: the export itself checks the folder again
+  }
+  if (ticket !== destCheck || rp.destDir !== dir) return;
+  if (info.problem && !rp.destFromProject) {
+    rp.destDir = null;
+    refreshDestUI();
+    updateWatchConflict();
+    scheduleEstimate();
+    return;
+  }
+  setDestProblem(info.problem);
+}
+
+function setDestProblem(problem) {
+  rp.destProblem = problem || null;
+  refreshDestUI();
+  updateStartButton();
+}
+
+function outputFolderFor(f) {
+  return ExportPlan.outputFolder(f.path, rp.destDir, appPaths);
+}
+
+// One folder for what is ticked, or null when the clips go to several
+function shownOutputFolder() {
+  if (rp.destDir) return rp.destDir;
+  const dirs = new Set(rp.files.filter((f) => f.selected !== false && !f.missing).map(outputFolderFor));
+  if (dirs.size === 1) return [...dirs][0];
+  const f = activeFile();
+  return f ? outputFolderFor(f) : null;
+}
+
+function refreshDestUI() {
+  const box = $('r-dest');
+  if (!box) return;
+  const ticked = rp.files.filter((f) => f.selected !== false && !f.missing);
+  const dirs = new Set(ticked.map(outputFolderFor));
+  box.textContent = rp.destDir || (dirs.size === 1 ? [...dirs][0] : ticked.length ? 'Next to each clip (several folders)' : 'Next to each clip');
+  $('r-dest-same').classList.toggle('chosen', !rp.destDir);
+  $('r-dest-same').title = rp.destDir ? 'Export next to the source clips' : 'Exports go next to the source clips';
+  $('r-dest-open').disabled = !!rp.destProblem || !shownOutputFolder();
+  const warn = $('r-dest-warn');
+  const inTemp = !rp.destDir && ticked.some((f) => ExportPlan.outputFolder(f.path, null, appPaths) !== ExportPlan.folderOf(f.path));
+  warn.textContent = rp.destProblem ? rp.destProblem : inTemp ? 'Clips from the Temp folder (test patterns) are saved in Documents.' : '';
+  warn.classList.toggle('hidden', !warn.textContent);
+  warn.style.color = rp.destProblem ? '' : 'var(--dim)';
+  refreshOutputName();
+}
+
+function refreshOutputName() {
+  const line = $('r-outname');
+  const f = activeFile();
+  const def = currentCodec();
+  if (!f || !project) {
+    line.classList.add('hidden');
+    return;
+  }
+  const alpha = $('r-alpha').value;
+  const targets = def.audioOnly ? [] : exportSizeTargets(rp.preflightMode);
+  let name;
+  if (def.audioOnly) {
+    name = `${ExportPlan.stemOf(baseName(f.path))}_audio_${$('r-depth').value}bit.wav`;
+  } else {
+    const t = targets[0];
+    const fit = Codecs.fitOutputSize(def.id, t.width, t.height, gpuSizeOpt());
+    const suffix = project.screens.length > 1 ? `_${sanitizeName(t.name)}` : '';
+    const stem = ExportPlan.outputStem(ExportPlan.stemOf(baseName(f.path)), def.id, alpha, fit.width, fit.height, suffix);
+    name = def.sequence ? `${stem}_seq` : `${stem}.${def.ext}`;
+  }
+  const more = targets.length > 1 ? `, plus ${ExportPlan.plural(targets.length - 1, 'other')}` : '';
+  line.textContent = `${name}${more}`;
+  line.classList.remove('hidden');
+}
+
+// ---------------- folded panels ----------------
+function panelOpenState() {
+  try {
+    return JSON.parse(localStorage.getItem('xre:panels')) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function setPanelOpen(name, open, dontRemember) {
+  document.querySelector(`[data-acc="${name}"]`).setAttribute('aria-expanded', open ? 'true' : 'false');
+  document.querySelector(`[data-acc-body="${name}"]`).classList.toggle('hidden', !open);
+  if (dontRemember) return;
+  try {
+    const state = panelOpenState();
+    state[name] = open;
+    localStorage.setItem('xre:panels', JSON.stringify(state));
+  } catch (e) { /* only a convenience */ }
+}
+
+function panelEdits(f) {
+  if (!f) return { clip: false, color: false };
+  const d = Geometry.defaultTransform();
+  const color = ['brightness', 'contrast', 'saturation', 'hue', 'blur'];
+  const differs = (k) => (f.transform[k] == null ? d[k] != null : f.transform[k] !== d[k]);
+  return {
+    clip: Object.keys(d).filter((k) => !color.includes(k)).some(differs),
+    color: color.some(differs),
+  };
+}
+
+function refreshPanelDots() {
+  const edits = panelEdits(activeFile());
+  $('acc-dot-clip').classList.toggle('hidden', !edits.clip);
+  $('acc-dot-color').classList.toggle('hidden', !edits.color);
+}
+
+// A clip with changes opens the section that holds them, so they cannot go unnoticed
+function openEditedPanels() {
+  const edits = panelEdits(activeFile());
+  if (edits.clip) setPanelOpen('clip', true, true);
+  if (edits.color) setPanelOpen('color', true, true);
+}
+
+// ---------------- size estimate ----------------
+const estimateCache = new Map(); // sampleKey -> {bytes, frames, pixels} | null, per session
+let estimateTimer = null;
+let estimateRun = 0;
+
+function scheduleEstimate() {
+  if (estimateTimer) clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(refreshEstimate, 500);
+}
+
+function sampleKey(def, f, atSec, target) {
+  return JSON.stringify([
+    def.id, $('r-alpha').value, $('r-depth').value, $('r-bitrate').value,
+    gpuActive(), fastProresActive(), f.path, atSec, target,
+    ProjectDoc.hashText(ProjectDoc.stableStringify([project.input, project.slices, f.transform])),
+  ]);
+}
+
+async function refreshEstimate() {
+  const line = $('r-estimate');
+  if (!line || !project) return;
+  if (page !== 'render' || rp.running) return; // an export is using the processor
+  const run = ++estimateRun;
+  const stale = () => run !== estimateRun;
+  const clips = rp.files.filter((f) => f.selected !== false && !f.missing && (f.isImage || f.probe));
+  if (!clips.length) {
+    line.textContent = '';
+    line.className = 'estimate';
+    return;
+  }
+  const def = currentCodec();
+  const imageDuration = clampInt($('r-dur').value, 1, 3600);
+  const imageFps = clampInt($('r-fps').value, 1, 240);
+  const depth = parseInt($('r-depth').value, 10);
+  const seconds = (f) => (f.isImage ? imageDuration : ExportPlan.trimmedSeconds(fileDuration(f), f.inSec, f.outSec));
+  const clipPlan = clips.map((f) => {
+    const s = seconds(f);
+    const frames = def.still && !def.sequence ? 1 : f.isImage ? s * imageFps : s * ((f.probe && f.probe.fps) || 25);
+    return { frames, audioBytes: ExportPlan.audioBytes(def, f.probe, f.isImage ? 0 : s, depth) };
+  });
+  const targets = def.audioOnly ? [{ width: 1, height: 1 }] : exportSizeTargets(rp.preflightMode).map((t) => ({ width: t.width, height: t.height }));
+  let perOutput;
+  if (def.audioOnly) {
+    perOutput = { bytes: 1, frames: 1, pixels: 1 };
+    clipPlan.forEach((c) => { c.frames = 0; });
+  } else {
+    const f = clips.includes(activeFile()) ? activeFile() : clips[0];
+    const atSec = f.isImage ? 0 : (f.inSec > 0 ? f.inSec : 0) + seconds(f) / 2;
+    const scr = project.screens[0];
+    const key = sampleKey(def, f, atSec, [scr.width, scr.height]);
+    if (estimateCache.has(key)) {
+      perOutput = estimateCache.get(key);
+    } else {
+      line.textContent = 'Estimating size…';
+      line.className = 'estimate';
+      try {
+        perOutput = await api.estimateSample({
+          project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices },
+          job: { src: f.path, isImage: f.isImage, transform: f.transform, screen: { id: scr.id, name: scr.name, width: scr.width, height: scr.height } },
+          codec: def.id,
+          alpha: $('r-alpha').value,
+          depth,
+          bitrateMbps: calcNum($('r-bitrate').value) || null,
+          fps: imageFps,
+          imageDuration,
+          gpu: gpuActive(),
+          fastProres: fastProresActive(),
+          atSec,
+        });
+      } catch (e) {
+        perOutput = null;
+      }
+      if (stale()) return;
+      if (perOutput) estimateCache.set(key, perOutput); // a failed sample may work next time
+    }
+  }
+  const total = ExportPlan.estimateBytes(perOutput, clipPlan, targets);
+  if (total == null) {
+    line.textContent = '';
+    line.className = 'estimate';
+    return;
+  }
+
+  // Bytes per destination folder: "next to each clip" can mean several disks
+  const perDir = new Map();
+  clips.forEach((f, i) => {
+    const dir = outputFolderFor(f);
+    const one = ExportPlan.estimateBytes(perOutput, [clipPlan[i]], targets) || 0;
+    perDir.set(dir, (perDir.get(dir) || 0) + one);
+  });
+  let folders = [];
+  try {
+    folders = await api.outputFolders([...perDir.keys()]);
+  } catch (e) { /* free space stays unknown */ }
+  if (stale()) return;
+  const volume = ExportPlan.tightestVolume(ExportPlan.bytesPerVolume(folders, perDir).filter((v) => v.freeBytes != null));
+  line.textContent = ExportPlan.spaceLine(total, volume, Outputs.formatSize);
+  line.title = `Estimate from a short test encode of this clip, for ${ExportPlan.plural(clips.length, 'clip')}.`;
+  line.className = `estimate${volume && volume.level !== 'ok' ? ` ${volume.level}` : ''}`;
 }
 
 // ---------------- pre-export size check ----------------
@@ -3259,6 +3666,7 @@ function renderPreflight() {
       renderPreflight();
     });
     addBtn('Other codec', () => {
+      setPanelOpen('advanced', true);
       const sel = $('r-codec');
       sel.scrollIntoView({ block: 'center' });
       sel.focus();
@@ -3336,6 +3744,7 @@ async function startRender(filesOverride, optsOverride) {
     rp.running = false;
     updateStartButton();
     $('rp-add').disabled = false;
+    api.setTaskbarProgress(-1);
     processWatchQueue();
   }
 }
@@ -3389,7 +3798,7 @@ async function runExport(filesOverride, optsOverride) {
     const wavJobs = [];
     for (const f of audioFiles) {
       const pp = await api.pathParse(f.path);
-      const dest = rp.destDir || pp.dir;
+      const dest = outputFolderFor(f);
       wavJobs.push({
         src: f.path,
         isImage: false,
@@ -3401,7 +3810,7 @@ async function runExport(filesOverride, optsOverride) {
     }
     const wavPlan = await resolveExisting(wavJobs, !!filesOverride);
     if (!wavPlan) return;
-    beginExportUI();
+    beginExportUI(wavPlan.jobs);
     startNotes.forEach(logNote);
     logSkipped(wavPlan.skipped);
     try {
@@ -3416,7 +3825,7 @@ async function runExport(filesOverride, optsOverride) {
   // multiple screens: separate / merged / both
   let outMode = 'separate';
   if (project.screens.length > 1) {
-    outMode = (optsOverride && optsOverride.mode) || (await askOutputMode());
+    outMode = (optsOverride && optsOverride.mode) || (await askOutputMode(files.length));
     if (!outMode) return;
   }
 
@@ -3460,8 +3869,8 @@ async function runExport(filesOverride, optsOverride) {
     const OH = fit.height;
     for (const f of files) {
       const pp = await api.pathParse(f.path);
-      const dest = rp.destDir || pp.dir;
-      const stem = `${pp.base}_remap_${codecId}${alpha !== 'none' ? '_' + alpha : ''}_${OW}x${OH}${tgt.suffix}`;
+      const dest = outputFolderFor(f);
+      const stem = ExportPlan.outputStem(pp.base, codecId, alpha, OW, OH, tgt.suffix);
       let outPath, outDir = null;
       if (def.sequence) {
         outDir = await api.pathJoin(dest, stem + '_seq');
@@ -3489,7 +3898,7 @@ async function runExport(filesOverride, optsOverride) {
 
   const plan = await resolveExisting(jobs, !!filesOverride);
   if (!plan) return;
-  beginExportUI();
+  beginExportUI(plan.jobs);
   startNotes.forEach(logNote);
   logSkipped(plan.skipped);
 
@@ -3519,13 +3928,24 @@ async function runExport(filesOverride, optsOverride) {
   }
 }
 
-function beginExportUI() {
+function beginExportUI(jobs) {
   rp.cancelRequested = false;
+  const def = currentCodec();
+  const imageDuration = clampInt($('r-dur').value, 1, 3600);
+  rp.jobFiles = jobs.map((j) => rp.files.find((f) => f.path === j.src) || null);
+  rp.jobStates = jobs.map(() => 'wait');
+  rp.clock = ExportPlan.createBatchClock(jobs.map((j, i) => {
+    const f = rp.jobFiles[i];
+    return ExportPlan.jobWeight({ isImage: j.isImage, durationSec: f ? fileDuration(f) : 0, inSec: j.inSec, outSec: j.outSec }, def, imageDuration);
+  }), Date.now());
+  rp.files.forEach((f) => { f.exportState = ''; });
+  applyJobStates();
   updateStartButton();
   $('rp-add').disabled = true;
   $('r-progress').style.display = '';
   $('r-cancel').style.display = '';
   $('r-log').innerHTML = '';
+  api.setTaskbarProgress(0);
   $('r-bar').className = '';
   $('r-bar').style.width = '0%';
   $('r-plabel').className = '';
@@ -3541,12 +3961,17 @@ function showBatchOutcome(okCount, total, cancelled, warned) {
   plabel.textContent = o.text;
   $('r-ppct').textContent = '';
   $('r-cancel').style.display = 'none';
+  api.setTaskbarProgress(-1);
+  scheduleEstimate(); // the disk has less room now
+  return o;
 }
 
 // A failed batch that never reached a batch-done event (for example no ffmpeg found)
 function failExportUI(err, total) {
   const full = String((err && err.message) || err);
   addErrorRow('', full.split('\n')[0].replace(/^Error invoking remote method '[^']*': (Error: )?/, ''), full);
+  rp.jobStates = rp.jobStates.map(() => 'fail');
+  applyJobStates();
   showBatchOutcome(0, total, false);
 }
 
@@ -3613,28 +4038,70 @@ function addDoneRow(ev) {
 function onRenderEvent(ev) {
   const bar = $('r-bar'), plabel = $('r-plabel'), ppct = $('r-ppct'), log = $('r-log');
   if (!bar) return;
-  const jobPart = 100 / Math.max(1, ev.total);
+  const clock = rp.clock;
+  const clips = new Set(rp.jobFiles).size;
+  // The bar and the percentage both show the batch, weighted by clip length
+  const showProgress = (index, label) => {
+    const snap = clock.snapshot(Date.now());
+    bar.style.width = `${snap.fraction * 100}%`;
+    ppct.textContent = `${Math.round(snap.fraction * 100)}%`;
+    plabel.textContent = label !== undefined ? label : ExportPlan.progressLabel(index, ev.total, clips, snap);
+    api.setTaskbarProgress(Math.min(0.99, snap.fraction));
+  };
   if (ev.type === 'job-start') {
-    plabel.textContent = `(${ev.index + 1}/${ev.total}) ${ev.label || baseName(ev.file)}`;
-    bar.style.width = `${ev.index * jobPart}%`;
-    ppct.textContent = '0%';
+    if (clock) clock.start(ev.index, Date.now());
+    setJobState(ev.index, 'run');
+    if (clock) showProgress(ev.index);
   } else if (ev.type === 'progress') {
-    bar.style.width = `${ev.index * jobPart + (ev.percent / 100) * jobPart}%`;
-    ppct.textContent = `${Math.round(ev.percent)}%`;
+    if (clock) {
+      clock.progress(ev.index, ev.percent);
+      showProgress(ev.index);
+    }
   } else if (ev.type === 'job-verify') {
-    plabel.textContent = `(${ev.index + 1}/${ev.total}) Checking ${ev.label || baseName(ev.file)}`;
+    if (clock) showProgress(ev.index, `Checking ${ev.total > 1 ? `${clips !== ev.total ? 'file' : 'clip'} ${ev.index + 1} of ${ev.total}` : 'the export'}…`);
   } else if (ev.type === 'job-note') {
     logNote(ev.note);
   } else if (ev.type === 'job-done') {
-    bar.style.width = `${(ev.index + 1) * jobPart}%`;
+    if (clock) clock.finish(ev.index);
+    setJobState(ev.index, ev.check.warnings.length ? 'warn' : 'done');
     addDoneRow(ev);
   } else if (ev.type === 'job-error') {
+    if (clock) clock.finish(ev.index);
+    setJobState(ev.index, ev.error === 'Cancelled' ? '' : 'fail'); // stopping a clip is not a failure
     addErrorRow(ev.label || '', String(ev.error), ev.detail);
   } else if (ev.type === 'batch-done') {
+    rp.jobStates = rp.jobStates.map((s) => (s === 'wait' ? '' : s)); // jobs a cancel never reached
+    applyJobStates();
     const results = ev.results || [];
-    const warned = results.filter((r) => r.ok && r.check && r.check.warnings.length).length;
-    showBatchOutcome(results.filter((r) => r.ok).length, ev.total || results.length, ev.cancelled, warned);
+    const okResults = results.filter((r) => r.ok);
+    const warned = okResults.filter((r) => r.check && r.check.warnings.length).length;
+    const o = showBatchOutcome(okResults.length, ev.total || results.length, ev.cancelled, warned);
+    if (!ev.cancelled) {
+      const first = okResults[0];
+      api.notifyExportDone({ title: o.state === 'ok' ? 'Export finished' : 'Export needs a look', body: o.text, showPath: first ? first.out : null });
+    }
   }
+}
+
+// One clip's status follows from its outputs (one per screen)
+function setJobState(index, state) {
+  rp.jobStates[index] = state;
+  applyJobStates();
+}
+
+function applyJobStates() {
+  const byFile = new Map();
+  rp.jobFiles.forEach((f, i) => {
+    if (!f) return;
+    if (!byFile.has(f)) byFile.set(f, []);
+    byFile.get(f).push(rp.jobStates[i]);
+  });
+  byFile.forEach((states, f) => {
+    // A clip with an output that was cancelled is not "Exported", even if another output was
+    const status = ExportPlan.clipStatus(states.filter(Boolean));
+    f.exportState = states.every(Boolean) || status === 'fail' ? status : '';
+  });
+  refreshFileList();
 }
 
 // ---------------- watch folder ----------------
@@ -3728,6 +4195,7 @@ async function switchToProject(p, filePath) {
   await loadAllRefs();
   loadExportListFromProject();
   syncExportList(); // the tidied-up list is what counts as "no changes"
+  applyProjectExportSettings();
   fitView('input');
   fitView('output');
   refreshAll();
@@ -4042,6 +4510,7 @@ async function writeProject(asNew) {
     if (!target) return false;
   }
   syncExportList();
+  project.exportSettings = captureExportSettings(); // a file always carries its export settings
   const hash = ProjectDoc.fingerprint(project);
   const text = JSON.stringify(ProjectDoc.embedRefs(project, (key) => refStore.get(key) || null), null, 2);
   try {
@@ -4147,6 +4616,8 @@ function bindUI() {
     await switchToProject(newProject());
   };
   $('btn-open-proj').onclick = openProject;
+  $('btn-undo').title = `Undo (${IS_MAC ? '⌘Z' : 'Ctrl+Z'})`;
+  $('btn-redo').title = `Redo (${IS_MAC ? '⇧⌘Z' : 'Ctrl+Shift+Z'})`;
   $('btn-save-proj').title = `Save project (${IS_MAC ? '⌘S' : 'Ctrl+S'})`;
   $('btn-save-proj').onclick = () => saveProject(false);
   $('btn-save-as').title = `Save the project under a new name (${IS_MAC ? '⇧⌘S' : 'Ctrl+Shift+S'})`;
@@ -4683,10 +5154,25 @@ function bindUI() {
     layoutTimeline();
     syncExportList();
   };
-  $('r-codec').onchange = refreshCodecUI;
-  $('r-alpha').onchange = refreshCodecUI;
-  $('r-depth').onchange = refreshCodecUI;
+  $('r-codec').onchange = () => { refreshCodecUI(); exportSettingsChanged(); };
+  $('r-alpha').onchange = () => { refreshCodecUI(); exportSettingsChanged(); };
+  $('r-depth').onchange = () => { refreshCodecUI(); exportSettingsChanged(); };
+  $('r-bitrate').addEventListener('change', exportSettingsChanged);
   $('r-fps').addEventListener('input', refreshPixelCheck);
+  $('r-fps').addEventListener('change', exportSettingsChanged);
+  $('r-dur').addEventListener('change', exportSettingsChanged);
+  document.querySelectorAll('[data-acc]').forEach((b) => {
+    setPanelOpen(b.dataset.acc, panelOpenState()[b.dataset.acc] === true, true);
+    b.onclick = () => setPanelOpen(b.dataset.acc, b.getAttribute('aria-expanded') !== 'true');
+  });
+  buildTargetCards();
+  const fileManager = `Open the folder in ${FILE_MANAGER}`;
+  $('r-dest-open').title = fileManager;
+  $('r-dest-open').onclick = () => {
+    const dir = shownOutputFolder();
+    if (dir) api.openFolder(dir).catch(() => showToast('That folder cannot be opened.'));
+  };
+  $('r-dest-same').onclick = () => setDestDir(null);
   $('r-same-as-source').onclick = sameAsSource;
   $('r-gpu').checked = localStorage.getItem('xre:gpu') === '1';
   $('r-gpu').onchange = () => {
@@ -4700,11 +5186,7 @@ function bindUI() {
   };
   $('r-dest-btn').onclick = async () => {
     const dir = await api.openDirDialog({ title: 'Choose output folder' });
-    if (dir) {
-      rp.destDir = dir;
-      $('r-dest').textContent = dir;
-      updateWatchConflict();
-    }
+    if (dir) setDestDir(dir);
   };
   $('r-start').onclick = () => startRender();
   $('r-cancel').onclick = cancelEverything;
@@ -4744,7 +5226,11 @@ function bindUI() {
   api.onRenderEvent(onRenderEvent);
 
   // A drive plugged back in (or a file moved away) shows as soon as you come back to the app
-  window.addEventListener('focus', () => updateFileStates(rp.files.slice()));
+  window.addEventListener('focus', () => {
+    updateFileStates(rp.files.slice());
+    checkDestFolder();
+    scheduleEstimate();
+  });
 
   // Closing the window: main asks here first. 'asking' tells it we are alive and a question
   // may follow, so it waits without a time limit for the real answer.
@@ -4784,8 +5270,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   resizeCanvas();
   fitView('input');
   fitView('output');
+  appPaths = await api.appPaths().catch(() => null);
   loadExportListFromProject();
   syncExportList();
+  applyProjectExportSettings();
   refreshAll();
   refreshCodecUI();
   if (!restored || !loadDocFile()) setDocFile(null); // anything else started out as "no changes"
@@ -4854,6 +5342,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         drawRenderPreview();
       },
       setCodec: (id) => { $('r-codec').value = id; refreshCodecUI(); },
+      openPanels: () => ['clip', 'color', 'advanced'].forEach((n) => setPanelOpen(n, true, true)),
       projectState: () => JSON.stringify({ files: rp.files.map((f) => ({ path: f.path, inSec: f.inSec, outSec: f.outSec, x: f.transform.x, missing: f.missing })), dirty: docDirty(), path: docFile.path, input: project.input, slices: project.slices.length, canUndo: history.undo.length, undoBytes: history.undo.reduce((n, e) => n + e.mapping.length + (e.footage || '').length, 0) }),
       loadProjectFile: (p) => openProjectPath(p),
       importMapping: (p) => (extOf(p) === 'csv' ? importCsvPath(p) : importXmlPath(p)),
@@ -4885,6 +5374,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         };
         const q = (sel) => document.querySelector(sel);
         const out = { page };
+        if (page === 'render') ['clip', 'advanced'].forEach((n) => setPanelOpen(n, true, true));
         if (page === 'editor') {
           out.project = R(q('#project-section'));
           const items = [...document.querySelectorAll('#screen-tree .slice-item')];

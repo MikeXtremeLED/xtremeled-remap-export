@@ -246,13 +246,22 @@
       </div>
 
       <aside id="rp-right">
+        <div id="rp-scroll">
+        <div class="section">
+          <div class="panel-title">Plays back on</div>
+          <div class="target-grid" id="r-targets"></div>
+          <div id="r-target-custom" class="note hidden"></div>
+          <div id="r-codec-note" class="note"></div>
+        </div>
         <div class="section hidden" id="rp-pixel-check">
           <div class="panel-title">Pixel check</div>
           <div id="px-rows"></div>
           <div id="px-note" class="px-note"></div>
         </div>
-        <div class="section" id="rp-clip-section">
-          <div class="panel-title">Clip — <span id="rp-clip-name" class="dim">no selection</span></div>
+
+        <button class="acc-head" data-acc="clip" aria-expanded="false"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Clip transform</span><i class="acc-dot hidden" id="acc-dot-clip" title="This clip has changes here"></i></button>
+        <div class="section acc-body hidden" data-acc-body="clip" id="rp-clip-section">
+          <div class="subtitle">Clip: <span id="rp-clip-name" class="dim ellip">no selection</span></div>
           <div id="ct-info" class="clip-info"></div>
           <div class="row">
             <label>Fit</label>
@@ -287,21 +296,24 @@
           </div>
           <div class="row"><span id="ct-pixels" class="dim"></span></div>
           <div class="row slider-row"><label>Rotation</label><input type="range" id="ct-rot" min="-180" max="180" value="0" data-default="0" /><input type="text" inputmode="text" id="ct-rot-n" class="num" value="0" /><span class="dim">°</span></div>
-
-          <div class="subtitle">Color <span class="dim">(right-click a slider = reset)</span></div>
-          <div class="row slider-row"><label>Bright</label><input type="range" id="ct-bright" min="-100" max="100" value="0" data-default="0" /><span id="ct-bright-v" class="dim val">0</span></div>
-          <div class="row slider-row"><label>Contrast</label><input type="range" id="ct-contrast" min="-100" max="100" value="0" data-default="0" /><span id="ct-contrast-v" class="dim val">0</span></div>
-          <div class="row slider-row"><label>Saturation</label><input type="range" id="ct-sat" min="0" max="200" value="100" data-default="100" /><span id="ct-sat-v" class="dim val">1.0</span></div>
-          <div class="row slider-row"><label>Hue</label><input type="range" id="ct-hue" min="-180" max="180" value="0" data-default="0" /><span id="ct-hue-v" class="dim val">0°</span></div>
-          <div class="row slider-row"><label>Blur</label><input type="range" id="ct-blur" min="0" max="50" value="0" data-default="0" /><span id="ct-blur-v" class="dim val">0</span></div>
           <div class="row">
             <button id="ct-reset">Reset clip</button>
             <button id="ct-apply-all">Apply to all</button>
           </div>
         </div>
 
-        <div class="section">
-          <div class="panel-title">Export settings</div>
+        <button class="acc-head" data-acc="color" aria-expanded="false"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Color</span><i class="acc-dot hidden" id="acc-dot-color" title="This clip has changes here"></i></button>
+        <div class="section acc-body hidden" data-acc-body="color" id="rp-color-section">
+          <div class="note">Right-click a slider to reset it.</div>
+          <div class="row slider-row"><label>Bright</label><input type="range" id="ct-bright" min="-100" max="100" value="0" data-default="0" /><span id="ct-bright-v" class="dim val">0</span></div>
+          <div class="row slider-row"><label>Contrast</label><input type="range" id="ct-contrast" min="-100" max="100" value="0" data-default="0" /><span id="ct-contrast-v" class="dim val">0</span></div>
+          <div class="row slider-row"><label>Saturation</label><input type="range" id="ct-sat" min="0" max="200" value="100" data-default="100" /><span id="ct-sat-v" class="dim val">1.0</span></div>
+          <div class="row slider-row"><label>Hue</label><input type="range" id="ct-hue" min="-180" max="180" value="0" data-default="0" /><span id="ct-hue-v" class="dim val">0°</span></div>
+          <div class="row slider-row"><label>Blur</label><input type="range" id="ct-blur" min="0" max="50" value="0" data-default="0" /><span id="ct-blur-v" class="dim val">0</span></div>
+        </div>
+
+        <button class="acc-head" data-acc="advanced" aria-expanded="false"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Advanced</span></button>
+        <div class="section acc-body hidden" data-acc-body="advanced" id="rp-advanced">
           <div class="row">
             <label>Codec</label>
             <select id="r-codec" style="flex:1"></select>
@@ -342,7 +354,6 @@
             <span class="tag-ok" id="r-gpu-tag" hidden>tested</span>
           </div>
           <div class="note" id="r-gpu-note"></div>
-          <div id="r-codec-note" class="note"></div>
           <div id="r-still-row">
             <div class="subtitle">Image footage → video</div>
             <div class="row">
@@ -350,15 +361,7 @@
               <label style="min-width:52px">Length</label><input type="text" inputmode="text" id="r-dur" class="num" value="1" min="1" max="3600" /><span class="dim">s</span>
             </div>
           </div>
-          <div class="row">
-            <label>Output</label>
-            <button id="r-dest-btn">Choose…</button>
-          </div>
-          <div class="row"><span id="r-dest" class="dim ellip">same folder as footage</span></div>
-        </div>
-
-        <div class="section">
-          <div class="panel-title">Watch folder</div>
+          <div class="subtitle">Watch folder</div>
           <div class="row">
             <button id="w-choose">Choose folder…</button>
             <button id="w-toggle" disabled>Start</button>
@@ -371,15 +374,31 @@
           <div id="w-conflict" class="w-conflict hidden">Output folder is the same as the watch folder: choose a different folder to export automatically.</div>
         </div>
 
-        <div class="section">
+        <div class="section" id="rp-dest-section">
+          <div class="panel-title dest-title">Output folder<button id="r-dest-btn">Choose…</button></div>
+          <div id="r-dest" class="dest-path"></div>
+          <div class="dest-actions">
+            <button id="r-dest-open"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 3.5h4.2l1.5 1.6h7.3v7.4h-13z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Open folder</button>
+            <button id="r-dest-same">Same as footage</button>
+          </div>
+          <div id="r-dest-warn" class="missing-note hidden"></div>
+          <div id="r-outname" class="dest-name hidden"></div>
+        </div>
+        </div>
+
+        <div id="rp-bar">
           <div id="r-preflight" class="preflight hidden"></div>
-          <button id="r-start" class="accent big" disabled>Start export</button>
+          <div id="r-estimate" class="estimate"></div>
           <div id="r-missing-note" class="missing-note hidden"></div>
           <div class="progress-wrap" id="r-progress" style="display:none">
             <div class="progress-bar"><div id="r-bar"></div></div>
             <div class="progress-label"><span id="r-plabel"></span><span id="r-ppct"></span></div>
-            <button id="r-cancel" class="danger" style="margin-top:8px">Cancel</button>
           </div>
+          <div class="bar-actions">
+            <button id="r-start" class="accent big" disabled>Export</button>
+            <button id="r-cancel" class="danger" style="display:none">Cancel</button>
+          </div>
+          <div id="r-start-why" class="start-why hidden"></div>
           <div class="render-log" id="r-log"></div>
         </div>
       </aside>
@@ -394,6 +413,7 @@
   <script src="../shared/resolume.js"></script>
   <script src="../shared/hippo.js"></script>
   <script src="../shared/outputs.js"></script>
+  <script src="../shared/exportplan.js"></script>
   <script src="../shared/geometry.js"></script>
   <script src="../shared/mapcheck.js"></script>
   <script src="../shared/projectdoc.js"></script>

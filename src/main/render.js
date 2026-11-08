@@ -5,6 +5,7 @@
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const Geometry = require('../shared/geometry');
 const Codecs = require('../shared/codecs');
 const { explainError, checkOutputDir } = require('./errors');
@@ -862,7 +863,74 @@ async function runBatch(win, payload) {
   return results;
 }
 
+// Encodes a few frames of the clip to measure bytes per frame, for the size shown before Start.
+// Only one at a time: a newer request ends the older one, which then answers null.
+let sampleProc = null;
+
+async function sampleOutputSize(input) {
+  if (batchActive) return null;
+  if (sampleProc) {
+    try { sampleProc.kill('SIGKILL'); } catch (e) { /* already stopped */ }
+  }
+  const def = Codecs.byId(input.codec);
+  if (!def || def.audioOnly) return null;
+  const ffPath = ffmpegForCodec(input.codec);
+  if (!ffPath) return null;
+  const probe = probeMedia(ffPath, input.job.src);
+  // A sequence is measured as one PNG; ten of them would give the same bytes per frame
+  const codec = def.sequence ? 'png' : input.codec;
+  const maxFrames = codec === 'png' ? 1 : 10;
+  const gpuChoice = input.gpu ? Codecs.gpuFor(await detectGpu(), codec, input.depth) : null;
+  const out = path.join(os.tmpdir(), `xre-estimate-${process.pid}-${Date.now()}.${Codecs.byId(codec).ext}`);
+  const job = { ...input.job, outPath: out, outDir: null, allowPad: true, outSec: null, inSec: input.atSec || 0, pngTime: input.atSec || 0 };
+  const opts = {
+    codec,
+    alpha: input.alpha,
+    depth: input.depth,
+    bitrateMbps: input.bitrateMbps,
+    fps: input.fps,
+    imageDuration: input.imageDuration,
+    fastProres: !!input.fastProres && !gpuChoice,
+    gpu: !!gpuChoice,
+    gpuFamily: gpuChoice ? gpuChoice.family : null,
+    gpuEncoder: gpuChoice ? gpuChoice.id : null,
+  };
+  let built;
+  try {
+    built = buildArgs(input.project, job, opts, probe);
+  } catch (e) {
+    return null;
+  }
+  // A short clip or low image frame rate can have fewer frames left than the sample wants
+  const frames = Math.max(1, Math.min(maxFrames, built.expect.frames || maxFrames));
+  const args = built.args.slice();
+  args.splice(args.indexOf('-progress'), 0, '-frames:v', String(frames), '-an');
+  return new Promise((resolve) => {
+    const proc = spawn(ffPath, args);
+    sampleProc = proc;
+    const timer = setTimeout(() => proc.kill('SIGKILL'), 60000);
+    proc.stderr.on('data', () => {});
+    proc.stdout.on('data', () => {});
+    const finish = (code) => {
+      clearTimeout(timer);
+      if (sampleProc === proc) sampleProc = null;
+      let bytes = 0;
+      try {
+        bytes = fs.statSync(out).size;
+        fs.unlinkSync(out);
+      } catch (e) { /* nothing written */ }
+      if (code !== 0 || !bytes) return resolve(null);
+      resolve({ bytes, frames, pixels: built.expect.width * built.expect.height });
+    };
+    proc.on('error', () => finish(1));
+    proc.on('close', finish);
+  });
+}
+
 function cancel() {
+  if (sampleProc) {
+    try { sampleProc.kill('SIGKILL'); } catch (e) { /* already stopped */ }
+  }
   cancelled = true;
   for (const proc of activeProcs) {
     try {
@@ -874,6 +942,7 @@ function cancel() {
 }
 
 module.exports = {
+  sampleOutputSize,
   getCapabilities,
   detectGpu,
   setGpuDetection,
