@@ -12,10 +12,14 @@
       <span class="logo"><b class="x">X</b><span class="t">TREME</span><span class="led">L<span class="ebars"><i></i><i></i><i></i></span>D</span></span>
       <span class="app-name">Remap Export</span>
     </div>
+    <div class="tb-sep doc-sep"></div>
+    <div class="proj-file" id="proj-file"><span class="fname" id="proj-name"></span><span class="dot hidden" id="proj-dot" title="Unsaved changes">•</span></div>
+    <div class="tb-sep doc-sep"></div>
     <div class="tb-group" id="tb-editor-left">
       <button id="btn-new" title="New project">New</button>
       <button id="btn-open-proj" title="Open project (.xreproj)">Open…</button>
-      <button id="btn-save-proj" title="Save project (.xreproj)">Save</button>
+      <button id="btn-save-proj">Save</button>
+      <button id="btn-save-as" title="Save the project under a new name">Save as…</button>
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group">
@@ -44,6 +48,7 @@
       <button id="btn-zoom-fit" title="Zoom to fit">Fit</button>
     </div>
     <div class="spacer"></div>
+    <div id="toast-anchor"><div id="saved-toast" class="saved-toast hidden" role="status"><span class="chk">✓</span><span id="saved-toast-text"></span></div></div>
     <button id="btn-render" class="accent">Export</button>
     <button id="btn-back-editor" class="accent hidden">← Mapping</button>
   </header>
@@ -198,6 +203,7 @@
     <div id="render-page" class="hidden">
       <aside id="rp-left">
         <div class="panel-title">Footage</div>
+        <div id="rp-missing-line" class="missing-line hidden"></div>
         <div id="rp-files"></div>
         <div class="left-buttons">
           <button id="rp-add">+ Footage…</button>
@@ -368,6 +374,7 @@
         <div class="section">
           <div id="r-preflight" class="preflight hidden"></div>
           <button id="r-start" class="accent big" disabled>Start export</button>
+          <div id="r-missing-note" class="missing-note hidden"></div>
           <div class="progress-wrap" id="r-progress" style="display:none">
             <div class="progress-bar"><div id="r-bar"></div></div>
             <div class="progress-label"><span id="r-plabel"></span><span id="r-ppct"></span></div>
@@ -389,6 +396,7 @@
   <script src="../shared/outputs.js"></script>
   <script src="../shared/geometry.js"></script>
   <script src="../shared/mapcheck.js"></script>
+  <script src="../shared/projectdoc.js"></script>
   <script src="../shared/codecs.js"></script>
   <script src="app.js"></script>
 </body>

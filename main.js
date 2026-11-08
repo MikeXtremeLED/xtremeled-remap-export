@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const renderMod = require('./src/main/render');
 const Files = require('./src/main/output-files');
+const Store = require('./src/main/file-store');
 const Outputs = require('./src/shared/outputs');
 
 app.setName('XtremeLED Remap Export');
@@ -308,32 +309,60 @@ function makeIcon() {
   });
 }
 
-// Closing during an export asks first; "stop" lets ffmpeg stop and the temporary files go
-// before the window really closes. Not a sync dialog: ffmpeg keeps running behind it.
-let closeAsking = false;
-let closeConfirmed = false;
-function confirmCloseDuringExport(e, target) {
-  if (closeConfirmed || !renderMod.isBusy()) return;
-  e.preventDefault();
-  if (closeAsking) return;
-  closeAsking = true;
-  dialog
-    .showMessageBox(target, {
+// Asks the page whether it may close (it asks about unsaved work itself). A page that does
+// not even answer "asking" in time has hung or crashed: it can't save anything, so close.
+function pageAllowsClose(target) {
+  const wc = target.webContents;
+  if (wc.isDestroyed() || wc.isCrashed()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (answer) => {
+      clearTimeout(noAnswer);
+      ipcMain.removeListener('app:close-answer', onAnswer);
+      resolve(answer);
+    };
+    const onAnswer = (e, answer) => {
+      if (e.sender !== wc) return;
+      if (answer === 'asking') clearTimeout(noAnswer);
+      else finish(answer === true);
+    };
+    const noAnswer = setTimeout(() => finish(true), 5000);
+    ipcMain.on('app:close-answer', onAnswer);
+    wc.send('app:close-request');
+  });
+}
+
+async function closeSteps(target) {
+  if (!(await pageAllowsClose(target))) return;
+  if (renderMod.isBusy()) {
+    // Not a sync dialog: ffmpeg keeps running behind it. "Stop" lets ffmpeg stop and the
+    // temporary files go before the window really closes.
+    const { response } = await dialog.showMessageBox(target, {
       type: 'warning',
       message: 'An export is still running.',
       detail: 'Stop it and close the app? The file being exported is removed; finished files are kept.',
       buttons: ['Keep exporting', 'Stop and close'],
       defaultId: 0,
       cancelId: 0,
-    })
-    .then(async ({ response }) => {
-      closeAsking = false;
-      if (response !== 1) return;
-      closeConfirmed = true;
-      renderMod.cancel();
-      await renderMod.whenIdle();
-      if (!target.isDestroyed()) target.close();
     });
+    if (response !== 1) return;
+    renderMod.cancel();
+    await renderMod.whenIdle();
+  }
+  closeConfirmed = true;
+  if (!target.isDestroyed()) target.close();
+}
+
+// Unsaved work is asked about first: answering it never stops an export that then keeps running.
+let closeAsking = false;
+let closeConfirmed = false;
+function confirmClose(e, target) {
+  if (closeConfirmed) return;
+  e.preventDefault();
+  if (closeAsking) return;
+  closeAsking = true;
+  closeSteps(target).finally(() => {
+    closeAsking = false;
+  });
 }
 
 function createWindow() {
@@ -352,7 +381,7 @@ function createWindow() {
   });
 
   const thisWindow = win;
-  win.on('close', (e) => confirmCloseDuringExport(e, thisWindow));
+  win.on('close', (e) => confirmClose(e, thisWindow));
 
   const pageArg = process.argv.find((a) => a.startsWith('--page='));
   const query = {};
@@ -432,6 +461,11 @@ ipcMain.handle('dialog:save', async (e, opts = {}) => {
   return res.canceled ? null : res.filePath;
 });
 
+ipcMain.handle('dialog:message', async (e, opts = {}) => {
+  const res = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), opts);
+  return res.response;
+});
+
 ipcMain.handle('file:readText', (e, p) => fs.readFileSync(p, 'utf8'));
 
 ipcMain.handle('file:readDataUrl', (e, p) => {
@@ -450,10 +484,18 @@ ipcMain.handle('file:readDataUrl', (e, p) => {
   return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
 });
 
-ipcMain.handle('file:writeText', (e, p, text) => {
-  fs.writeFileSync(p, text, 'utf8');
+ipcMain.handle('file:writeText', async (e, p, text) => {
+  await Store.writeTextSafely(p, text);
   return true;
 });
+
+ipcMain.handle('file:exists', (e, paths) => Store.filesExist(paths));
+ipcMain.handle('file:findByName', (e, dir, names) => Store.findByName(dir, names));
+
+const refStoreDir = () => path.join(app.getPath('userData'), 'reference-images');
+ipcMain.handle('refs:put', (e, key, dataUrl) => Store.refPut(refStoreDir(), key, dataUrl));
+ipcMain.handle('refs:get', (e, key) => Store.refGet(refStoreDir(), key));
+ipcMain.handle('refs:prune', (e, keepKeys) => Store.refPrune(refStoreDir(), keepKeys));
 
 // Write a dataURL to an arbitrary path (e.g. save test pattern PNG)
 ipcMain.handle('file:writeDataUrl', (e, p, dataUrl) => {

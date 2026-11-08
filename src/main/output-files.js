@@ -125,4 +125,4 @@ function fileIsBusy(p) {
   }
 }
 
-module.exports = { markOwn, isOwnOutput, partialFor, nextVersion, claimVersion, resolveTarget, existingOutputs, discard, promote, fileIsBusy, O_EXLOCK };
+module.exports = { markOwn, isOwnOutput, partialFor, nextVersion, claimVersion, resolveTarget, existingOutputs, discard, renameRetry, promote, fileIsBusy, O_EXLOCK };

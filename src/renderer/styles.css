@@ -103,6 +103,27 @@ select { width: auto; }
 .brand .app-name { color: var(--dim); font-size: 12px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; }
 .tb-group { display: flex; gap: 4px; align-items: center; }
 .tb-sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+.proj-file { display: flex; align-items: center; gap: 6px; min-width: 40px; flex: 0 1 auto; font-size: 12px; color: var(--text); white-space: nowrap; }
+.proj-file .fname { overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.proj-file .dot { color: var(--accent); font-size: 20px; line-height: 1; flex-shrink: 0; }
+#toast-anchor { position: relative; width: 0; height: 28px; flex: none; }
+.saved-toast {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  font-size: 12px; color: var(--text); white-space: nowrap; z-index: 20;
+}
+.saved-toast.below { top: auto; bottom: -34px; transform: none; }
+/* below the default window width the toolbar has to fit too: tighter, without the app name */
+@media (max-width: 1400px) {
+  #toolbar { gap: 4px; }
+  #toolbar button { padding-left: 8px; padding-right: 8px; }
+  .brand .app-name { display: none; }
+  .tb-sep { margin: 0 1px; }
+}
+.saved-toast .chk { color: #4caf50; font-weight: 700; }
 .spacer { flex: 1; }
 .tabs { display: flex; gap: 2px; background: #1a1d1f; border-radius: 5px; padding: 2px; }
 .tab { border: none; background: transparent; padding: 5px 14px; border-radius: 4px; }
@@ -211,6 +232,25 @@ select { width: auto; }
 .slice-item.off .nm { color: var(--dim); text-decoration: line-through; }
 .file-row .tag { background: var(--panel2); border-radius: 3px; padding: 1px 6px; font-size: 10px; color: var(--dim); }
 .file-row.edited .nm { color: var(--accent-hi); }
+.missing-line {
+  padding: 4px 10px; font-size: 11px; color: #f08a8a;
+  background: rgba(224, 85, 85, 0.10);
+  border-top: 1px solid rgba(224, 85, 85, 0.45);
+  border-bottom: 1px solid rgba(224, 85, 85, 0.45);
+}
+.file-row.missing { flex-wrap: wrap; box-shadow: inset 2px 0 0 var(--danger); row-gap: 5px; }
+.file-row.missing:hover { background: rgba(224, 85, 85, 0.06); }
+.file-row.missing.selected { background: rgba(224, 85, 85, 0.12); box-shadow: inset 2px 0 0 var(--danger); }
+.file-row.missing .nm { color: var(--text); }
+.file-row .tag.missing-tag { background: rgba(224, 85, 85, 0.18); color: #f08a8a; font-weight: 600; flex-shrink: 0; }
+.file-row .locate-line { flex-basis: 100%; display: flex; justify-content: flex-end; }
+.file-row .locate-line button { padding: 1px 8px; font-size: 11px; line-height: 1.5; }
+.missing-note { margin-top: 6px; color: #f08a8a; font-size: 11px; }
+.map-diff-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 12px; }
+.map-diff-row .dim { flex-shrink: 0; }
+.map-diff-list { margin-top: 8px; }
+.map-diff-list .add { color: #7fcf83; }
+.map-diff-list .del { color: #f08a8a; }
 .left-buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;

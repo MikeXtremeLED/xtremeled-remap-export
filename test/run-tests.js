@@ -597,6 +597,7 @@ fs.unlinkSync(outWav);
   ok('missing source explained, details kept');
 
   require('./mapcheck-tests').run(ok);
+  await require('./projectdoc-tests').run(ok, tmp);
   await require('./pixel-tests').run(ok, caps.proresPath, tmp);
   await require('./safe-export-tests').run(ok, caps.proresPath, tmp);
   await require('./speed-tests').run(ok, caps.proresPath, tmp);

@@ -7,7 +7,17 @@ contextBridge.exposeInMainWorld('xre', {
   saveDialog: (opts) => ipcRenderer.invoke('dialog:save', opts || {}),
   readFileText: (p) => ipcRenderer.invoke('file:readText', p),
   readFileDataUrl: (p) => ipcRenderer.invoke('file:readDataUrl', p),
+  messageBox: (opts) => ipcRenderer.invoke('dialog:message', opts),
   writeFileText: (p, t) => ipcRenderer.invoke('file:writeText', p, t),
+  filesExist: (paths) => ipcRenderer.invoke('file:exists', paths),
+  findInFolder: (dir, names) => ipcRenderer.invoke('file:findByName', dir, names),
+  refPut: (key, dataUrl) => ipcRenderer.invoke('refs:put', key, dataUrl),
+  refGet: (key) => ipcRenderer.invoke('refs:get', key),
+  refPrune: (keepKeys) => ipcRenderer.invoke('refs:prune', keepKeys),
+  onCloseRequest: (cb) => {
+    ipcRenderer.on('app:close-request', () => cb());
+  },
+  answerClose: (answer) => ipcRenderer.send('app:close-answer', answer),
   writeTempDataUrl: (name, dataUrl) => ipcRenderer.invoke('file:writeTempDataUrl', name, dataUrl),
   writeFileDataUrl: (p, dataUrl) => ipcRenderer.invoke('file:writeDataUrl', p, dataUrl),
   copyText: (text) => ipcRenderer.invoke('clipboard:writeText', text),

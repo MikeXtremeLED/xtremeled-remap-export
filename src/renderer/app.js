@@ -19,6 +19,7 @@ let maskEdit = false;
 // Keep aspect ratio while scaling a slice in the Output view (toolbar lock or Shift).
 let outLock = localStorage.getItem('xre:outlock') === '1';
 const refImgs = { input: null, output: null };
+const refImgKeys = { input: null, output: null }; // which stored image each refImgs entry shows
 const vt = {
   input: { scale: 0.1, ox: 50, oy: 50 },
   output: { scale: 0.1, ox: 50, oy: 50 },
@@ -218,11 +219,17 @@ function moveItem(arr, from, to) {
 const history = { undo: [], redo: [] };
 let lastNudge = 0;
 
-function snapshot() {
-  return JSON.stringify(project);
+// One undo step. A mapping edit leaves the footage list alone; a step taken before a project
+// switch (import, open, new) also brings back the old footage and the file it belonged to.
+function snapshot(withFootage) {
+  return {
+    mapping: JSON.stringify(ProjectDoc.withoutFootage(project)),
+    footage: withFootage ? JSON.stringify(project.exportList) : null,
+    file: withFootage ? { path: docFile.path, savedHash: docFile.savedHash } : null,
+  };
 }
-function pushHistory() {
-  history.undo.push(snapshot());
+function pushHistory(withFootage) {
+  history.undo.push(snapshot(!!withFootage));
   if (history.undo.length > 100) history.undo.shift();
   history.redo.length = 0;
   updateUndoButtons();
@@ -232,26 +239,36 @@ function pushHistoryThrottled(ms) {
   if (now - lastNudge > (ms || 800)) pushHistory();
   lastNudge = now;
 }
-async function restoreSnapshot(json) {
-  project = migrateProject(JSON.parse(json));
+async function restoreSnapshot(entry) {
+  const parsed = JSON.parse(entry.mapping);
+  parsed.exportList = entry.footage !== null ? JSON.parse(entry.footage) : project.exportList;
+  project = migrateProject(parsed);
   if (selId && !project.slices.some((s) => s.id === selId)) selId = null;
   if (selScreenId && !project.screens.some((s) => s.id === selScreenId)) selScreenId = null;
   if (!project.screens.some((s) => s.id === activeScreenId)) activeScreenId = project.screens[0].id;
   await loadAllRefs();
-  loadExportListFromProject();
+  if (entry.footage !== null) {
+    loadExportListFromProject();
+    syncExportList();
+    Object.assign(docFile, entry.file);
+    persistDocFile();
+  }
   refreshAll();
+  refreshDocBar();
   markDirty();
 }
 async function undo() {
   if (!history.undo.length) return;
-  history.redo.push(snapshot());
-  await restoreSnapshot(history.undo.pop());
+  const entry = history.undo.pop();
+  history.redo.push(snapshot(entry.footage !== null));
+  await restoreSnapshot(entry);
   updateUndoButtons();
 }
 async function redo() {
   if (!history.redo.length) return;
-  history.undo.push(snapshot());
-  await restoreSnapshot(history.redo.pop());
+  const entry = history.redo.pop();
+  history.undo.push(snapshot(entry.footage !== null));
+  await restoreSnapshot(entry);
   updateUndoButtons();
 }
 function updateUndoButtons() {
@@ -345,22 +362,69 @@ function migrateProject(p) {
     }
     if (s.mask && (!s.mask.points || s.mask.points.length < 3)) s.mask = null;
   });
+  ProjectDoc.internRefs(p, rememberRef);
   return p;
 }
 
 // ---------------- persistence ----------------
 let saveTimer = null;
+let docBarTimer = null;
 function markDirty() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
       localStorage.setItem('xre:project', JSON.stringify(project));
-    } catch (e) {
-      try {
-        localStorage.setItem('xre:project', JSON.stringify({ ...project, refs: { input: null, output: null } }));
-      } catch (e2) { /* give up */ }
-    }
+    } catch (e) { /* storage full: the last autosave stays */ }
   }, 400);
+  if (!docBarTimer) {
+    docBarTimer = setTimeout(() => {
+      docBarTimer = null;
+      refreshDocBar();
+    }, 120);
+  }
+}
+
+// The file this project belongs to, and the state it was last saved in. Unsaved means the
+// content differs from that state, so undoing back to it counts as saved again.
+const DEMO_MODE = new URLSearchParams(location.search).get('demo') === '1';
+const docFile = { path: null, savedHash: null };
+function persistDocFile() {
+  if (DEMO_MODE) return;
+  try {
+    localStorage.setItem('xre:doc', JSON.stringify(docFile));
+  } catch (e) { /* the next save tries again */ }
+}
+function loadDocFile() {
+  try {
+    const stored = JSON.parse(localStorage.getItem('xre:doc'));
+    if (stored && typeof stored.savedHash === 'string') {
+      docFile.path = stored.path || null;
+      docFile.savedHash = stored.savedHash;
+      return true;
+    }
+  } catch (e) { /* no usable record */ }
+  return false;
+}
+function setDocFile(path) {
+  docFile.path = path;
+  docFile.savedHash = ProjectDoc.fingerprint(project);
+  persistDocFile();
+  refreshDocBar();
+}
+function docDirty() {
+  return ProjectDoc.fingerprint(project) !== docFile.savedHash;
+}
+function docLabel() {
+  return docFile.path ? baseName(docFile.path) : project.name || 'Untitled';
+}
+function refreshDocBar() {
+  if (!project || docFile.savedHash === null) return;
+  const dirty = docDirty();
+  const name = $('proj-name');
+  name.textContent = docLabel();
+  name.title = docFile.path || 'Not saved to a file yet';
+  $('proj-dot').classList.toggle('hidden', !dirty);
+  document.title = `${docLabel()}${dirty ? ' •' : ''} - XtremeLED Remap Export`;
 }
 function loadLocal() {
   try {
@@ -373,21 +437,47 @@ function loadLocal() {
 }
 
 // ---------------- ref images ----------------
+// Each image is held once, under a key: undo steps and the autosave carry only the key.
+const refStore = new Map();
+function rememberRef(key, dataUrl) {
+  if (refStore.has(key)) return;
+  refStore.set(key, dataUrl);
+  api.refPut(key, dataUrl).catch(() => { /* the session still has it in memory */ });
+}
+function makeRef(dataUrl, name, opacity) {
+  const holder = { refs: { input: { dataUrl, name, opacity } } };
+  ProjectDoc.internRefs(holder, rememberRef);
+  return holder.refs.input;
+}
 function loadRefImage(v) {
   return new Promise((resolve) => {
     const ref = project.refs[v];
-    if (!ref || !ref.dataUrl) {
+    const key = ref && ref.key;
+    if (key && refImgs[v] && refImgKeys[v] === key) return resolve(); // already decoded
+    const dataUrl = key ? refStore.get(key) : null;
+    if (!dataUrl) {
       refImgs[v] = null;
+      refImgKeys[v] = null;
       return resolve();
     }
     const img = new Image();
-    img.onload = () => { refImgs[v] = img; resolve(); };
-    img.onerror = () => { refImgs[v] = null; resolve(); };
-    img.src = ref.dataUrl;
+    img.onload = () => { refImgs[v] = img; refImgKeys[v] = key; resolve(); };
+    img.onerror = () => { refImgs[v] = null; refImgKeys[v] = null; resolve(); };
+    img.src = dataUrl;
   });
 }
 async function loadAllRefs() {
   await Promise.all([loadRefImage('input'), loadRefImage('output')]);
+}
+// After a restart the images come back from the store on disk
+async function restoreStoredRefs() {
+  for (const v of ['input', 'output']) {
+    const ref = project.refs[v];
+    if (!ref || !ref.key || refStore.has(ref.key)) continue;
+    const dataUrl = await api.refGet(ref.key).catch(() => null);
+    if (dataUrl) refStore.set(ref.key, dataUrl);
+    else project.refs[v] = null;
+  }
 }
 
 // ---------------- canvas & drawing (editor) ----------------
@@ -1363,7 +1453,7 @@ function switchPage(p) {
   $('btn-render').classList.toggle('hidden', p === 'render');
   $('btn-back-editor').classList.toggle('hidden', p !== 'render');
   ['tb-editor-left', 'view-tabs'].forEach((id) => $(id).classList.toggle('hidden', p === 'render'));
-  document.querySelectorAll('#toolbar .zoom, #toolbar .tb-sep').forEach((el) => el.classList.toggle('hidden', p === 'render'));
+  document.querySelectorAll('#toolbar .zoom, #toolbar .tb-sep:not(.doc-sep)').forEach((el) => el.classList.toggle('hidden', p === 'render'));
   refreshScreenSelectors();
   if (p === 'editor') {
     resizeCanvas();
@@ -1720,7 +1810,7 @@ async function addTestPattern() {
 async function testPatternAsReference() {
   pushHistory();
   const c = makeTestPatternCanvas();
-  project.refs.input = { dataUrl: c.toDataURL('image/png'), name: 'test pattern', opacity: 0.9 };
+  project.refs.input = makeRef(c.toDataURL('image/png'), 'test pattern', 0.9);
   await loadRefImage('input');
   if (view !== 'input') switchView('input');
   refreshRefPanel();
@@ -1795,25 +1885,111 @@ function loadExportListFromProject() {
   rp.activeIndex = rp.files.length ? 0 : -1;
   refreshFileList();
   refreshClipControls();
-  // probe async, refresh as results come in
-  rp.files.forEach(async (f) => {
-    try {
-      f.probe = await api.previewProbe(f.path);
-    } catch (e) {
-      f.probe = null;
-    }
-    refreshFileList();
-    if (activeFile() === f) {
-      refreshClipControls();
-      layoutTimeline();
-      fetchFrame(true);
-    }
-  });
+  updateFileStates(rp.files.slice()); // async, the list follows as results come in
   if (rp.files.length) selectFile(0);
   else {
     layoutTimeline();
     drawRenderPreview();
   }
+}
+
+// Which of these files are still there? Those that are (back) get probed. Files that went
+// missing keep their trims and settings; only what came from the file itself is cleared.
+async function updateFileStates(list) {
+  if (!list.length) return;
+  const asked = list.map((f) => f.path);
+  let there;
+  try {
+    there = await api.filesExist(asked);
+  } catch (e) {
+    there = list.map(() => true); // can't tell: treat them as there, ffmpeg will report what isn't
+  }
+  const flipped = [], toProbe = [];
+  list.forEach((f, i) => {
+    if (f.path !== asked[i]) return; // relinked while we were asking: this answer is about the old path
+    if (!there[i]) {
+      if (!f.missing) flipped.push(f);
+      f.missing = true;
+      f.probe = null;
+      f.frameImg = null;
+    } else {
+      if (f.missing !== false) toProbe.push(f);
+      f.missing = false;
+    }
+  });
+  if (flipped.length) showFileStates(flipped);
+  await Promise.all(toProbe.map(async (f) => {
+    try {
+      f.probe = await api.previewProbe(f.path);
+    } catch (e) {
+      f.probe = null;
+    }
+    showFileStates([f]);
+  }));
+}
+
+function showFileStates(changed) {
+  refreshFileList();
+  if (!changed.includes(activeFile())) return;
+  refreshClipControls();
+  layoutTimeline();
+  fetchFrame(true);
+  loadWaveform(activeFile());
+  drawRenderPreview();
+}
+
+// Points one missing row at the chosen file, then finds the other missing files by name in
+// that same folder. Trims and settings stay: only the path and what came from the file change.
+async function locateFile(f) {
+  const paths = await api.openDialog({
+    title: `Locate ${baseName(f.path)}`,
+    filters: [
+      { name: 'Footage', extensions: [...IMAGE_EXTS, ...VIDEO_EXTS] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (!paths.length) return;
+  await relinkFiles(f, paths[0]);
+}
+
+async function relinkFiles(f, chosen) {
+  const inList = (p) => rp.files.some((o) => o !== f && Outputs.samePath(o.path, p));
+  if (inList(chosen)) {
+    alert(`${baseName(chosen)} is already in the footage list.`);
+    return;
+  }
+  const relinks = [[f, chosen]];
+  const others = rp.files.filter((o) => o !== f && o.missing);
+  if (others.length) {
+    const { dir } = await api.pathParse(chosen);
+    const found = await api.findInFolder(dir, others.map((o) => baseName(o.path)));
+    // Two rows can share a name in different folders: the file goes to the first, the rest stay Missing
+    const nfc = (p) => String(p).normalize('NFC');
+    const claimed = [chosen];
+    others.forEach((o) => {
+      const p = found[baseName(o.path)];
+      if (!p || inList(p) || claimed.some((c) => Outputs.samePath(nfc(c), nfc(p)))) return;
+      claimed.push(p);
+      relinks.push([o, p]);
+    });
+  }
+  await Promise.all(relinks.map(async ([file, p]) => {
+    file.path = p;
+    file.isImage = isImagePath(p);
+    file.missing = false;
+    file.frameImg = null;
+    file.waveform = null;
+    try {
+      file.probe = await api.previewProbe(p);
+    } catch (e) {
+      file.probe = null;
+    }
+  }));
+  syncExportList();
+  refreshCodecUI();
+  selectFile(Math.max(0, rp.files.indexOf(f)));
+  const left = rp.files.filter((o) => o.missing).length;
+  showToast(left ? `Found ${relinks.length}, ${left} still missing` : `Found ${relinks.length} file${relinks.length === 1 ? '' : 's'}`);
 }
 
 function resizeRenderCanvas() {
@@ -1969,6 +2145,11 @@ function drawRenderPreview() {
     rpCtx.font = '14px -apple-system, sans-serif';
     rpCtx.textAlign = 'center';
     rpCtx.fillText('Add footage to preview it on the map', cw / 2, ch / 2);
+  } else if (f && f.missing) {
+    rpCtx.fillStyle = '#f08a8a';
+    rpCtx.font = '14px -apple-system, sans-serif';
+    rpCtx.textAlign = 'center';
+    rpCtx.fillText(`${baseName(f.path)} is missing. Use Locate… in the footage list.`, cw / 2, ch / 2);
   }
 }
 
@@ -1982,7 +2163,7 @@ function refreshFileList() {
   rp.files.forEach((f, i) => {
     const row = document.createElement('div');
     const edited = !Geometry.isIdentityTransform(f.transform);
-    row.className = 'file-row' + (i === rp.activeIndex ? ' selected' : '') + (edited ? ' edited' : '');
+    row.className = 'file-row' + (i === rp.activeIndex ? ' selected' : '') + (edited ? ' edited' : '') + (f.missing ? ' missing' : '');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = f.selected !== false;
@@ -2006,6 +2187,23 @@ function refreshFileList() {
     const stretched = footageStretch(f);
     sz.classList.toggle('warn', !!stretched);
     row.append(cb, tag, nm, sz);
+    if (f.missing) {
+      const missingTag = document.createElement('span');
+      missingTag.className = 'tag missing-tag';
+      missingTag.textContent = 'Missing';
+      sz.replaceWith(missingTag);
+      const line = document.createElement('div');
+      line.className = 'locate-line';
+      const btn = document.createElement('button');
+      btn.textContent = 'Locate…';
+      btn.title = 'Find this file. Other missing files are found in the same folder.';
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        locateFile(f);
+      };
+      line.appendChild(btn);
+      row.appendChild(line);
+    }
     row.onclick = () => selectFile(i);
     enableReorder(row, i, (from, to) => {
       const act = activeFile();
@@ -2018,6 +2216,9 @@ function refreshFileList() {
     list.appendChild(row);
     if (stretched) list.appendChild(footageWarnRow(f, stretched));
   });
+  const missing = rp.files.filter((f) => f.missing).length;
+  $('rp-missing-line').textContent = `${missing} file${missing === 1 ? '' : 's'} missing`;
+  $('rp-missing-line').classList.toggle('hidden', !missing);
   updateStartButton();
   $('rp-clip-name').textContent = activeFile() ? baseName(activeFile().path) : 'no selection';
   // keep the "image footage" settings row in sync with the list contents
@@ -2160,7 +2361,11 @@ async function checkBeforeExport(files, isAuto, notes) {
 }
 
 function updateStartButton() {
-  $('r-start').disabled = !rp.files.some((f) => f.selected !== false) || rp.running;
+  const ticked = rp.files.filter((f) => f.selected !== false);
+  const skipped = ticked.filter((f) => f.missing).length;
+  $('r-start').disabled = ticked.length === skipped || rp.running;
+  $('r-missing-note').textContent = `${skipped} missing file${skipped === 1 ? '' : 's'} will be skipped`;
+  $('r-missing-note').classList.toggle('hidden', !skipped);
 }
 
 async function addFootage(paths, opts) {
@@ -2178,6 +2383,7 @@ async function addFootage(paths, opts) {
       selected: true,
       inSec: null,
       outSec: null,
+      missing: false,
     };
     if (firstNew < 0) firstNew = rp.files.length;
     rp.files.push(f);
@@ -2282,7 +2488,7 @@ function drawWaveform() {
 }
 
 function loadWaveform(f) {
-  if (!f || f.isImage || f.waveform || f.waveLoading) return;
+  if (!f || f.isImage || f.missing !== false || f.waveform || f.waveLoading) return;
   if (f.probe && f.probe.hasAudio === false) return;
   f.waveLoading = true;
   api.previewWaveform(f.path).then((peaks) => {
@@ -2354,6 +2560,10 @@ function bindTimeline() {
 function fetchFrame(immediate) {
   const f = activeFile();
   if (!f) return;
+  if (f.missing !== false) { // gone, or not checked yet: the preview says so / the check fetches it
+    drawRenderPreview();
+    return;
+  }
   if (rp.playing) return; // playback drives the preview
   if (frameTimer) clearTimeout(frameTimer);
   frameTimer = setTimeout(async () => {
@@ -2555,6 +2765,11 @@ function prettyCodec(probe) {
 function refreshClipInfo() {
   const f = activeFile();
   const el = $('ct-info');
+  if (f && f.missing) {
+    el.style.display = '';
+    el.textContent = `File missing: ${f.path}`;
+    return;
+  }
   if (!f || !f.probe) {
     el.textContent = f ? 'probing…' : '';
     el.style.display = f ? '' : 'none';
@@ -3144,8 +3359,16 @@ function logSkipped(skipped) {
 
 async function runExport(filesOverride, optsOverride) {
   stopPlayback(false);
-  const files = filesOverride || rp.files.filter((f) => f.selected !== false);
-  if (!files.length) return;
+  const chosen = filesOverride || rp.files.filter((f) => f.selected !== false);
+  if (!chosen.length) return;
+  await updateFileStates(chosen); // a file can have gone since the last look
+  const files = chosen.filter((f) => !f.missing);
+  const startNotes = chosen.filter((f) => f.missing).map((f) => `Skipped ${baseName(f.path)}: the file is missing.`);
+  if (!files.length) {
+    if (filesOverride) startNotes.forEach(logNote);
+    else alert('The selected footage is missing. Use Locate… in the footage list first.');
+    return;
+  }
   const codecId = $('r-codec').value;
   const def = Codecs.byId(codecId);
   const alpha = $('r-alpha').value;
@@ -3179,6 +3402,7 @@ async function runExport(filesOverride, optsOverride) {
     const wavPlan = await resolveExisting(wavJobs, !!filesOverride);
     if (!wavPlan) return;
     beginExportUI();
+    startNotes.forEach(logNote);
     logSkipped(wavPlan.skipped);
     try {
       const wavResults = await api.renderStart({ project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices }, jobs: wavPlan.jobs, codec: codecId, depth, fps, imageDuration, existingPolicy: wavPlan.policy });
@@ -3209,7 +3433,6 @@ async function runExport(filesOverride, optsOverride) {
     return;
   }
 
-  const startNotes = [];
   if (!(await checkBeforeExport(files, !!filesOverride, startNotes))) return;
 
   const targets = []; // {proj, screen, suffix}
@@ -3496,17 +3719,134 @@ async function importXml() {
   await importXmlPath(paths[0]);
 }
 
-async function switchToProject(p) {
+// filePath: the project file this is, when it is one
+async function switchToProject(p, filePath) {
   project = migrateProject(p);
   selId = null;
   selScreenId = null;
   activeScreenId = project.screens[0].id;
   await loadAllRefs();
   loadExportListFromProject();
+  syncExportList(); // the tidied-up list is what counts as "no changes"
   fitView('input');
   fitView('output');
   refreshAll();
+  setDocFile(filePath || null);
   markDirty();
+}
+
+// Gives the imported mapping to the open project: footage, trims, name and reference images stay
+function replaceMapping(imported) {
+  project = ProjectDoc.adoptMapping(project, migrateProject(imported));
+  selId = null;
+  selScreenId = null;
+  activeScreenId = project.screens[0].id;
+  rp.screenId = activeScreenId;
+  fitView('input');
+  fitView('output');
+  fitRenderView();
+  refreshAll();
+  refreshCodecUI();
+  markDirty();
+}
+
+// With footage loaded the import is a mapping update: review it first, keep the footage by
+// default. Returns 'replaced', 'clean', or null when nothing happened.
+async function applyImport(imported, source) {
+  if (!rp.files.length) {
+    if (!(await guardUnsaved())) return null;
+    pushHistory(true);
+    await switchToProject(imported);
+    return 'clean';
+  }
+  const update = source.derivedSizes ? ProjectDoc.keepDerivedSizes(project, imported) : imported;
+  const choice = await askReplaceMapping(ProjectDoc.diffMapping(project, update), source);
+  if (choice === 'replace') {
+    pushHistory(); // undo brings the old mapping back and leaves the footage alone
+    replaceMapping(update);
+    showToast('Mapping replaced');
+    return 'replaced';
+  }
+  if (choice === 'clean') {
+    if (!(await guardUnsaved())) return null;
+    pushHistory(true);
+    await switchToProject(imported);
+    return 'clean';
+  }
+  return null;
+}
+
+function askReplaceMapping(diff, source) {
+  return new Promise((resolve) => {
+    openModal(`
+      <div class="modal" style="width:520px">
+        <div class="modal-head"><span id="m-title"></span><button class="close-x" id="m-close">✕</button></div>
+        <div class="modal-body">
+          <div class="import-intro" id="m-intro"></div>
+          <div id="m-summary"></div>
+          <div class="exists-list map-diff-list hidden" id="m-details"></div>
+          <div id="m-warn-wrap" class="hidden" style="margin-top:10px">
+            <div class="import-sub">Not taken over</div>
+            <div class="exists-list" id="m-warn"></div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="m-cancel">Cancel</button>
+          <button id="m-clean" title="Discards the footage list, trims and clip settings">Start clean</button>
+          <button id="m-replace" class="accent">Replace mapping, keep footage</button>
+        </div>
+      </div>
+    `);
+    const n = rp.files.length;
+    $('m-title').textContent = 'Replace the mapping?';
+    $('m-intro').textContent = `${source.fileName} replaces the current mapping. Your ${n} footage file${n === 1 ? '' : 's'}, trims and clip settings stay.${source.note ? ' ' + source.note : ''}`;
+    const addRow = (label, value) => {
+      const row = document.createElement('div');
+      row.className = 'map-diff-row';
+      const a = document.createElement('span');
+      a.textContent = label;
+      const b = document.createElement('span');
+      b.className = 'dim';
+      b.textContent = value;
+      row.append(a, b);
+      $('m-summary').appendChild(row);
+    };
+    addRow('Canvas', diff.canvas ? `${diff.canvas.from} → ${diff.canvas.to}` : `${diff.canvasSize}, unchanged`);
+    diff.screensResized.forEach((s) => addRow(`Output ${s.name}`, `${s.from} → ${s.to}`));
+    if (diff.screensAdded.length) addRow('Outputs added', diff.screensAdded.join(', '));
+    if (diff.screensRemoved.length) addRow('Outputs removed', diff.screensRemoved.join(', '));
+    addRow('Slices', diff.identical
+      ? 'no differences'
+      : `${diff.slicesMoved.length} moved · ${diff.slicesAdded.length} added · ${diff.slicesRemoved.length} removed · ${diff.slicesUnchanged} unchanged`);
+    const details = $('m-details');
+    const addDetail = (text, cls) => {
+      const row = document.createElement('div');
+      row.textContent = text;
+      row.title = text;
+      if (cls) row.className = cls;
+      details.appendChild(row);
+    };
+    diff.slicesAdded.forEach((name) => addDetail(`+ ${name}`, 'add'));
+    diff.slicesRemoved.forEach((name) => addDetail(`− ${name}`, 'del'));
+    diff.slicesMoved.forEach((m) => addDetail(`${m.name}: ${m.changes.join(', ')}`));
+    details.classList.toggle('hidden', !details.children.length);
+    $('m-warn-wrap').classList.toggle('hidden', !source.warnings.length);
+    source.warnings.forEach((w) => {
+      const row = document.createElement('div');
+      row.textContent = w;
+      row.style.whiteSpace = 'normal';
+      $('m-warn').appendChild(row);
+    });
+    const done = (val) => {
+      closeModal();
+      resolve(val);
+    };
+    $('m-close').onclick = () => done(null);
+    $('m-cancel').onclick = () => done(null);
+    $('m-clean').onclick = () => done('clean');
+    $('m-replace').onclick = () => done('replace');
+    $('m-replace').focus();
+  });
 }
 
 async function importXmlPath(p) {
@@ -3517,9 +3857,8 @@ async function importXmlPath(p) {
     delete proj.warnings;
     proj.refs = { input: null, output: null };
     proj.slices.forEach((s) => (s.id = uid()));
-    pushHistory();
-    await switchToProject(proj);
-    if (warnings.length) {
+    const outcome = await applyImport(proj, { fileName: baseName(p), warnings });
+    if (outcome === 'clean' && warnings.length) {
       showImportReport('XML import', `Imported ${proj.slices.length} slice${proj.slices.length === 1 ? '' : 's'}.`, warnings);
     }
   } catch (err) {
@@ -3545,8 +3884,13 @@ async function importCsvPath(path) {
     delete proj.warnings;
     proj.refs = { input: null, output: null };
     proj.slices.forEach((s) => (s.id = uid()));
-    pushHistory();
-    await switchToProject(proj);
+    const outcome = await applyImport(proj, {
+      fileName: baseName(path),
+      warnings,
+      derivedSizes: true,
+      note: 'A CSV holds no canvas or output size, so the current sizes stay as long as the tiles fit in them.',
+    });
+    if (outcome !== 'clean') return;
     const sc = proj.screens[0];
     showImportReport(
       'CSV import',
@@ -3598,22 +3942,28 @@ async function exportCsv() {
 
   const written = [];
   const notes = [];
-  if (screens.length > 1) {
-    // one CSV is exactly one output, so a multi-screen project becomes one file per screen
-    const pp = await api.pathParse(target);
-    for (const sc of screens) {
-      const file = await api.pathJoin(pp.dir, `${pp.base}-${sanitizeName(sc.name)}${pp.ext || '.csv'}`);
-      await api.writeFileText(file, Hippo.exportCsv(project, sc.id));
-      written.push(baseName(file));
-      notes.push(...Hippo.exportNotes(project, sc.id));
+  try {
+    if (screens.length > 1) {
+      // one CSV is exactly one output, so a multi-screen project becomes one file per screen
+      const pp = await api.pathParse(target);
+      for (const sc of screens) {
+        const file = await api.pathJoin(pp.dir, `${pp.base}-${sanitizeName(sc.name)}${pp.ext || '.csv'}`);
+        await api.writeFileText(file, Hippo.exportCsv(project, sc.id));
+        written.push(baseName(file));
+        notes.push(...Hippo.exportNotes(project, sc.id));
+      }
+    } else {
+      const sid = screens.length ? screens[0].id : null;
+      await api.writeFileText(target, Hippo.exportCsv(project, sid));
+      written.push(baseName(target));
+      notes.push(...Hippo.exportNotes(project, sid));
     }
-  } else {
-    const sid = screens.length ? screens[0].id : null;
-    await api.writeFileText(target, Hippo.exportCsv(project, sid));
-    written.push(baseName(target));
-    notes.push(...Hippo.exportNotes(project, sid));
+  } catch (err) {
+    await showSaveError(err);
+    return;
   }
 
+  showToast(written.length > 1 ? `Saved ${written.length} files` : `Saved ${written[0]}`);
   if (written.length > 1 || notes.length) {
     const lines = [];
     if (written.length > 1) {
@@ -3634,17 +3984,106 @@ async function exportXml() {
     filters: [{ name: 'XML', extensions: ['xml'] }],
   });
   if (!p) return;
-  await api.writeFileText(p, Resolume.exportScreenSetup(project));
+  try {
+    await api.writeFileText(p, Resolume.exportScreenSetup(project));
+    showToast(`Saved ${baseName(p)}`);
+  } catch (err) {
+    await showSaveError(err);
+  }
 }
 
-async function saveProject() {
-  const p = await api.saveDialog({
-    title: 'Save project',
-    defaultPath: (project.name || 'project').replace(/[/\\:]/g, '-') + '.xreproj',
-    filters: [{ name: 'XtremeLED Remap project', extensions: ['xreproj'] }],
+// The message a failed save came with, without the wrapper Electron puts around it
+function ipcMessage(err) {
+  return String((err && err.message) || err).replace(/^Error invoking remote method '[^']*': (Error: )?/, '');
+}
+
+function showSaveError(err) {
+  return api.messageBox({ type: 'error', message: 'The file was not saved.', detail: ipcMessage(err), buttons: ['OK'] });
+}
+
+let toastTimer = null;
+function showToast(text) {
+  $('saved-toast-text').textContent = text;
+  const toast = $('saved-toast');
+  toast.classList.remove('hidden');
+  // In the toolbar when there is room for it, just below when the buttons fill it
+  toast.classList.remove('below');
+  toast.classList.toggle('below', toast.getBoundingClientRect().left < document.querySelector('#toolbar .spacer').getBoundingClientRect().left);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('saved-toast').classList.add('hidden'), 2000);
+}
+
+// Commits a value still being typed, so it is part of what gets saved
+function commitFieldEdit() {
+  const el = document.activeElement;
+  if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) el.blur();
+}
+
+// Save writes straight to the project's file; without one (or asNew) it asks where.
+// True only when the project really is on disk.
+let savingNow = null;
+function saveProject(asNew) {
+  if (!savingNow) {
+    savingNow = writeProject(asNew === true).finally(() => {
+      savingNow = null;
+    });
+  }
+  return savingNow;
+}
+
+async function writeProject(asNew) {
+  let target = asNew ? null : docFile.path;
+  if (!target) {
+    target = await api.saveDialog({
+      title: 'Save project',
+      defaultPath: docFile.path || (project.name || 'project').replace(/[/\\:]/g, '-') + '.xreproj',
+      filters: [{ name: 'XtremeLED Remap project', extensions: ['xreproj'] }],
+    });
+    if (!target) return false;
+  }
+  syncExportList();
+  const hash = ProjectDoc.fingerprint(project);
+  const text = JSON.stringify(ProjectDoc.embedRefs(project, (key) => refStore.get(key) || null), null, 2);
+  try {
+    await api.writeFileText(target, text);
+  } catch (err) {
+    if (asNew) {
+      await showSaveError(err);
+      return false;
+    }
+    const choice = await api.messageBox({
+      type: 'error',
+      message: 'The project was not saved.',
+      detail: ipcMessage(err),
+      buttons: ['Save as…', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    return choice === 0 ? writeProject(true) : false;
+  }
+  docFile.path = target;
+  docFile.savedHash = hash;
+  persistDocFile();
+  refreshDocBar();
+  showToast('Saved');
+  return true;
+}
+
+// Before something replaces the project: asks only when something really changed.
+// True means go ahead (saved, or the user chose not to).
+async function guardUnsaved() {
+  commitFieldEdit();
+  if (!docDirty()) return true;
+  const choice = await api.messageBox({
+    type: 'warning',
+    message: `Save the changes to ${docLabel()}?`,
+    detail: 'Your changes are lost if you do not save them.',
+    buttons: ['Save', "Don't save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
   });
-  if (!p) return;
-  await api.writeFileText(p, JSON.stringify(project, null, 2));
+  if (choice === 2) return false;
+  return choice === 1 ? true : saveProject(false);
 }
 
 async function openProject() {
@@ -3653,10 +4092,15 @@ async function openProject() {
     filters: [{ name: 'XtremeLED Remap project', extensions: ['xreproj', 'json'] }],
   });
   if (!paths.length) return;
+  await openProjectPath(paths[0]);
+}
+
+async function openProjectPath(p) {
   try {
-    const text = await api.readFileText(paths[0]);
-    pushHistory();
-    await switchToProject(JSON.parse(text));
+    const parsed = migrateProject(JSON.parse(await api.readFileText(p)));
+    if (!(await guardUnsaved())) return;
+    pushHistory(true);
+    await switchToProject(parsed, p);
   } catch (err) {
     alert('Open failed: ' + (err.message || err));
   }
@@ -3675,7 +4119,7 @@ async function setReferenceFromPath(p) {
   pushHistory();
   const dataUrl = await api.readFileDataUrl(p);
   const pp = await api.pathParse(p);
-  project.refs[view] = { dataUrl, name: pp.base + pp.ext, opacity: parseInt($('ref-opacity').value, 10) / 100 };
+  project.refs[view] = makeRef(dataUrl, pp.base + pp.ext, parseInt($('ref-opacity').value, 10) / 100);
   await loadRefImage(view);
   refreshRefPanel();
   draw();
@@ -3698,12 +4142,15 @@ function bindUI() {
   $('btn-zoom-fit').onclick = () => { fitView(view); draw(); };
 
   $('btn-new').onclick = async () => {
-    if (!confirm('Start a new project? Unsaved changes will be lost.')) return;
-    pushHistory();
+    if (!(await guardUnsaved())) return;
+    pushHistory(true);
     await switchToProject(newProject());
   };
   $('btn-open-proj').onclick = openProject;
-  $('btn-save-proj').onclick = saveProject;
+  $('btn-save-proj').title = `Save project (${IS_MAC ? '⌘S' : 'Ctrl+S'})`;
+  $('btn-save-proj').onclick = () => saveProject(false);
+  $('btn-save-as').title = `Save the project under a new name (${IS_MAC ? '⇧⌘S' : 'Ctrl+Shift+S'})`;
+  $('btn-save-as').onclick = () => saveProject(true);
   $('btn-import-xml').onclick = importXml;
   $('btn-export-xml').onclick = exportXml;
   $('btn-import-csv').onclick = importCsv;
@@ -4048,6 +4495,14 @@ function bindUI() {
   }, true);
 
   window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      if ($('modal-root').classList.contains('hidden')) {
+        commitFieldEdit();
+        saveProject(e.shiftKey);
+      }
+      return;
+    }
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') {
       // In text fields: ensure editing shortcuts work even if the platform menu
@@ -4111,15 +4566,7 @@ function bindUI() {
     const vids = paths.filter((p) => VIDEO_EXTS.includes(extOf(p)));
     if (xmls.length) return importXmlPath(xmls[0]);
     if (csvs.length) return importCsvPath(csvs[0]);
-    if (projs.length) {
-      try {
-        pushHistory();
-        await switchToProject(JSON.parse(await api.readFileText(projs[0])));
-      } catch (err) {
-        alert('Open failed: ' + (err.message || err));
-      }
-      return;
-    }
+    if (projs.length) return openProjectPath(projs[0]);
     if (page === 'render' && (imgs.length || vids.length)) return addFootage([...imgs, ...vids]);
     if (imgs.length && page === 'editor') return setReferenceFromPath(imgs[0]);
     if (vids.length || imgs.length) {
@@ -4295,6 +4742,22 @@ function bindUI() {
     else resizeRenderCanvas();
   }).observe($('main'));
   api.onRenderEvent(onRenderEvent);
+
+  // A drive plugged back in (or a file moved away) shows as soon as you come back to the app
+  window.addEventListener('focus', () => updateFileStates(rp.files.slice()));
+
+  // Closing the window: main asks here first. 'asking' tells it we are alive and a question
+  // may follow, so it waits without a time limit for the real answer.
+  api.onCloseRequest(async () => {
+    api.answerClose('asking');
+    let allowed = false;
+    try {
+      allowed = await guardUnsaved();
+    } catch (e) {
+      allowed = false;
+    }
+    api.answerClose(allowed === true);
+  });
 }
 
 // ---------------- init ----------------
@@ -4306,22 +4769,28 @@ window.addEventListener('DOMContentLoaded', async () => {
   rpVideo = $('rp-video');
 
   const params = new URLSearchParams(location.search);
-  const demo = params.get('demo') === '1';
-  project = (!demo && loadLocal()) || demoProject();
+  const demo = DEMO_MODE;
+  const restored = demo ? null : loadLocal();
+  project = restored || ProjectDoc.internRefs(demoProject(), rememberRef);
   activeScreenId = project.screens[0].id;
   rp.screenId = project.screens[0].id;
 
   buildCodecSelect();
   bindUI();
   updateUndoButtons();
+  await restoreStoredRefs();
   await loadAllRefs();
   $('status-hint').textContent = `Drag = move · Handles = resize · Shift = keep ratio · Scroll = pan · ${IS_MAC ? '⌘' : 'Ctrl'}+scroll = zoom · ${IS_MAC ? '⌘' : 'Ctrl+'}Z undo`;
   resizeCanvas();
   fitView('input');
   fitView('output');
   loadExportListFromProject();
+  syncExportList();
   refreshAll();
   refreshCodecUI();
+  if (!restored || !loadDocFile()) setDocFile(null); // anything else started out as "no changes"
+  refreshDocBar();
+  if (!demo) api.refPrune(ProjectDoc.refKeys(project)).catch(() => { /* tried on the next start */ });
 
   try {
     caps = await api.ffmpegCaps();
@@ -4385,6 +4854,13 @@ window.addEventListener('DOMContentLoaded', async () => {
         drawRenderPreview();
       },
       setCodec: (id) => { $('r-codec').value = id; refreshCodecUI(); },
+      projectState: () => JSON.stringify({ files: rp.files.map((f) => ({ path: f.path, inSec: f.inSec, outSec: f.outSec, x: f.transform.x, missing: f.missing })), dirty: docDirty(), path: docFile.path, input: project.input, slices: project.slices.length, canUndo: history.undo.length, undoBytes: history.undo.reduce((n, e) => n + e.mapping.length + (e.footage || '').length, 0) }),
+      loadProjectFile: (p) => openProjectPath(p),
+      importMapping: (p) => (extOf(p) === 'csv' ? importCsvPath(p) : importXmlPath(p)),
+      saveTo: async (p) => { docFile.path = p; return saveProject(false); },
+      undo: () => undo(),
+      redo: () => redo(),
+      relink: (i, p) => relinkFiles(rp.files[i], p),
       hasPreview: () => {
         const f = activeFile();
         return !!(f && f.frameImg);
