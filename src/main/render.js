@@ -129,6 +129,18 @@ function literalInputArgs(file) {
   return /\.(png|jpe?g|tiff?|bmp|webp)$/i.test(file) && isFramePattern(file) ? ['-pattern_type', 'none'] : [];
 }
 
+// The colour matrix out of ffmpeg's "(tv, bt709/unknown/unknown, progressive)" text, or null.
+// ffmpeg prints one name when matrix, primaries and transfer are equal, else matrix/primaries/transfer.
+function probeColorspace(details) {
+  if (!details) return null;
+  const known = /^(bt709|bt470bg|smpte170m|smpte240m|bt2020nc|bt2020c|fcc|ycgco|ictcp|gbr)$/;
+  for (const raw of details.split(',')) {
+    const token = raw.trim().split('/')[0];
+    if (known.test(token)) return token;
+  }
+  return null;
+}
+
 // Probe duration / fps / resolution / codec / audio of a source file via ffmpeg -i.
 function probeMedia(ffPath, file) {
   const r = spawnSync(ffPath, ['-hide_banner', ...literalInputArgs(file), '-i', file], { encoding: 'utf8', timeout: 20000 });
@@ -158,8 +170,12 @@ function probeMedia(ffPath, file) {
   if (cm) out.videoCodec = cm[1];
   const pv = vline.match(/\((ap\w\w|ap4x)\s*\//);
   if (pv) out.proresVariant = pv[1];
-  const pf = vline.match(/,\s*(yuva?\d+p?\d*[a-z]*|rgba?|gray\d*[a-z]*|rgb\d+[a-z]*)/);
-  if (pf) out.pixFmt = pf[1];
+  // "Video: <codec details>, <pix_fmt>(tv, bt709/unknown/unknown, progressive), ..."
+  const pf = vline.match(/Video:[^,]*,\s*([0-9a-z_]+)(?:\(([^)]*)\))?/);
+  if (pf && pf[1] !== 'none') {
+    out.pixFmt = pf[1];
+    out.colorspace = probeColorspace(pf[2]);
+  }
   const br = err.match(/bitrate:\s*(\d+)\s*kb\/s/);
   if (br) out.bitrateKbps = parseInt(br[1], 10);
   const aline = (err.match(/Stream #[^\n]*Audio:[^\n]*/) || [''])[0];
@@ -352,22 +368,33 @@ function buildArgs(project, job, opts, probe) {
   const inSec = !job.isImage && job.inSec > 0 ? job.inSec : 0;
   const outSec = !job.isImage && job.outSec > inSec ? job.outSec : null;
 
-  const baseColor = useAlphaPipeline ? 'black@0.0' : 'black';
-  const fmtRGBA = useAlphaPipeline ? ',format=rgba' : '';
-  const parts = [];
   const tr = job.transform;
+  // The whole graph stays in the source's format; see Codecs.pixelPlan
+  const plan = Codecs.pixelPlan(sl, probe, { alpha: useAlphaPipeline, transform: tr });
+  const baseColor = useAlphaPipeline ? 'black@0.0' : 'black';
+  const fpsRate = Codecs.exactRate(fps);
+  const baseFmt = `,format=${plan.basePix}`;
+  const overlayFmt = `:format=${plan.overlay}`;
+  const parts = [];
 
-  // Stills grab frame #1: after an input seek (-ss) the first video frame can start
-  // slightly after t=0 while the color base starts at 0 — reset pts so they line up,
-  // otherwise the exported still is the bare black base.
-  const ptsReset = isStill && !isSeq ? ['setpts=PTS-STARTPTS'] : [];
+  // Stills grab frame #1, and a trim starts at the frame after the in-point: after an input
+  // seek (-ss) the first video frame starts slightly after t=0 while the color base starts
+  // at 0 — reset pts so they line up, otherwise the first frame is the bare black base.
+  const ptsReset = (isStill && !isSeq) || inSec > 0 ? ['setpts=PTS-STARTPTS'] : [];
+
+  // An untagged YUV source is taken as BT.709. Without this the BT.709 encoder tags make
+  // ffmpeg convert it as if it were BT.601, which shifts every colour.
+  const srcFmt = plan.source;
+  const tagSource = srcFmt && srcFmt.family === 'yuv' && !(probe && probe.colorspace)
+    ? ['setparams=colorspace=bt709']
+    : [];
 
   if (!Geometry.isIdentityTransform(tr) && probe && probe.width && probe.height) {
     const lay = Geometry.clipLayout(probe.width, probe.height, tr, IW, IH);
     const bw = Math.max(2, Math.round(lay.bw));
     const bh = Math.max(2, Math.round(lay.bh));
-    const chain = [...ptsReset, `scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
-    if (useAlphaPipeline) chain.push('format=rgba');
+    const chain = [...tagSource, ...ptsReset, `scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
+    if (useAlphaPipeline) chain.push(`format=${plan.srcPix}`);
     if (tr.rotation) {
       chain.push(
         `rotate=${lay.angleRad.toFixed(6)}:ow=${Math.max(2, Math.ceil(lay.rw))}:oh=${Math.max(2, Math.ceil(lay.rh))}:c=black${useAlphaPipeline ? '@0.0' : ''}`
@@ -375,11 +402,12 @@ function buildArgs(project, job, opts, probe) {
     }
     chain.push(...adjustOps(tr));
     parts.push(`[0:v]${chain.join(',')}[clip]`);
-    parts.push(`color=c=${baseColor}:s=${IW}x${IH}:r=${fps}${fmtRGBA}[ibase]`);
-    parts.push(`[ibase][clip]overlay=${Math.round(lay.x)}:${Math.round(lay.y)}:shortest=1[src]`);
+    parts.push(`color=c=${baseColor}:s=${IW}x${IH}:r=${fpsRate}${baseFmt}[ibase]`);
+    parts.push(`[ibase][clip]overlay=${Math.round(lay.x)}:${Math.round(lay.y)}:shortest=1${overlayFmt}[src]`);
   } else {
-    const chain = [...ptsReset, `scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr)];
-    if (useAlphaPipeline) chain.push('format=rgba');
+    // format= fixes the shared part of the graph: without it, the 4:4:4 step of one odd
+    // slice would be negotiated upstream and change every even slice too
+    const chain = [...tagSource, ...ptsReset, `scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr), `format=${plan.srcPix}`];
     parts.push(`[0:v]${chain.join(',')}[src]`);
   }
 
@@ -393,15 +421,19 @@ function buildArgs(project, job, opts, probe) {
   const maskInputs = [];
   sl.forEach((s, i) => {
     const maskFile = s.polyMask && job.maskFiles ? job.maskFiles[s.slice.id] : null;
+    const turned = s.rot === 90 || s.rot === 270;
+    const sameSize = (turned ? s.crop.h : s.crop.w) === s.place.w && (turned ? s.crop.w : s.crop.h) === s.place.h;
     const ops = [
-      `crop=${s.crop.w}:${s.crop.h}:${s.crop.x}:${s.crop.y}`,
+      // A crop can only start on a chroma sample; on odd pixels 10-bit chroma comes out as garbage
+      ...(plan.needs444(s) ? [`format=${plan.crop444}`] : []),
+      `crop=${s.crop.w}:${s.crop.h}:${s.crop.x}:${s.crop.y}:exact=1`,
       ...contentOps(s.rot, s.flip),
-      `scale=${s.place.w}:${s.place.h}:flags=bicubic`,
+      ...(sameSize ? [] : [`scale=${s.place.w}:${s.place.h}:flags=bicubic`]),
     ];
     if (maskFile) {
       const mIdx = 1 + maskInputs.length;
       maskInputs.push(maskFile);
-      parts.push(`[s${i}]${ops.join(',')},format=rgba[cc${i}]`);
+      parts.push(`[s${i}]${ops.join(',')},format=${plan.maskPix}[cc${i}]`);
       parts.push(`[${mIdx}:v]scale=${s.place.w}:${s.place.h},format=gray[mm${i}]`);
       parts.push(`[cc${i}][mm${i}]alphamerge[c${i}]`);
     } else {
@@ -409,13 +441,13 @@ function buildArgs(project, job, opts, probe) {
     }
   });
 
-  parts.push(`color=c=${baseColor}:s=${OW}x${OH}:r=${fps}${fmtRGBA}[base]`);
+  parts.push(`color=c=${baseColor}:s=${OW}x${OH}:r=${fpsRate}${baseFmt}[base]`);
   let prev = 'base';
   sl.forEach((s, i) => {
     const last = i === sl.length - 1;
     const outLabel = last ? (alpha === 'only' ? 'pre' : 'out') : `o${i}`;
     const shortest = i === 0 ? ':shortest=1' : '';
-    parts.push(`[${prev}][c${i}]overlay=${s.place.x}:${s.place.y}${shortest}[${outLabel}]`);
+    parts.push(`[${prev}][c${i}]overlay=${s.place.x}:${s.place.y}${shortest}${overlayFmt}[${outLabel}]`);
     prev = outLabel;
   });
   if (alpha === 'only') parts.push('[pre]alphaextract[out]');

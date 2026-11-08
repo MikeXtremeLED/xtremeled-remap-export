@@ -130,22 +130,27 @@
       const flip = s.flip || 0;
       const fr = applyFlipFrac(rotFracRange(fx0, fx1, fy0, fy1, rot), flip);
 
+      // Round the edges, not the sizes, so adjoining slices keep a shared edge
+      const cropX = Math.round(eff.x);
+      const cropY = Math.round(eff.y);
+      const placeX = Math.round(s.out.x + fr.x0 * s.out.w);
+      const placeY = Math.round(s.out.y + fr.y0 * s.out.h);
       const entry = {
         slice: s,
         rot,
         flip,
         polyMask: hasMask && !maskIsRect(s.mask), // needs raster mask in ffmpeg
         crop: {
-          x: Math.round(eff.x),
-          y: Math.round(eff.y),
-          w: Math.max(1, Math.round(eff.w)),
-          h: Math.max(1, Math.round(eff.h)),
+          x: cropX,
+          y: cropY,
+          w: Math.max(1, Math.round(eff.x + eff.w) - cropX),
+          h: Math.max(1, Math.round(eff.y + eff.h) - cropY),
         },
         place: {
-          x: Math.round(s.out.x + fr.x0 * s.out.w),
-          y: Math.round(s.out.y + fr.y0 * s.out.h),
-          w: Math.max(1, Math.round((fr.x1 - fr.x0) * s.out.w)),
-          h: Math.max(1, Math.round((fr.y1 - fr.y0) * s.out.h)),
+          x: placeX,
+          y: placeY,
+          w: Math.max(1, Math.round(s.out.x + fr.x1 * s.out.w) - placeX),
+          h: Math.max(1, Math.round(s.out.y + fr.y1 * s.out.h) - placeY),
         },
       };
       result.push(entry);

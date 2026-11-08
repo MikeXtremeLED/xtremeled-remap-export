@@ -238,6 +238,11 @@
       </div>
 
       <aside id="rp-right">
+        <div class="section hidden" id="rp-pixel-check">
+          <div class="panel-title">Pixel check</div>
+          <div id="px-rows"></div>
+          <div id="px-note" class="px-note"></div>
+        </div>
         <div class="section" id="rp-clip-section">
           <div class="panel-title">Clip — <span id="rp-clip-name" class="dim">no selection</span></div>
           <div id="ct-info" class="clip-info"></div>
@@ -296,9 +301,9 @@
           <div class="row">
             <label>Alpha</label>
             <select id="r-alpha">
-              <option value="none">No alpha</option>
-              <option value="straight">With alpha</option>
-              <option value="only">Only alpha</option>
+              <option value="none">None</option>
+              <option value="straight">Straight</option>
+              <option value="only">Only</option>
             </select>
             <label style="min-width:auto">Depth</label>
             <select id="r-depth">

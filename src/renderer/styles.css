@@ -269,6 +269,24 @@ select { width: auto; }
 }
 #left .panel-title, #rp-left .panel-title { padding: 10px 10px 6px; }
 .subtitle { color: var(--dim); font-size: 11px; margin: 10px 0 4px; display: flex; align-items: center; gap: 8px; }
+
+/* Pixel check card (export page) */
+#rp-pixel-check { box-shadow: inset 2px 0 0 var(--accent); background: linear-gradient(90deg, var(--accent-dim), rgba(247, 148, 30, 0) 70%); }
+#rp-pixel-check .panel-title { color: var(--accent-hi); padding: 0 0 6px; }
+.px-row { display: grid; grid-template-columns: 14px 66px 1fr; column-gap: 6px; align-items: start; font-size: 12px; line-height: 18px; padding: 1.5px 0; }
+.px-row svg { color: var(--ok); display: block; margin-top: 2px; }
+.px-row.warn svg { color: var(--accent-hi); }
+.px-row .k { color: var(--dim); }
+.px-row .v { color: var(--text); overflow-wrap: anywhere; }
+.px-note { color: var(--dim); font-size: 11px; line-height: 1.35; margin-top: 8px; }
+.px-note:empty { display: none; }
+
+/* Let the right panel's fields shrink to the panel instead of pushing it wider */
+#rp-right .slider-row input[type='range'] { min-width: 0; }
+#rp-right select { min-width: 0; appearance: none; padding-left: 10px; padding-right: 22px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23e8eaec' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 6px center; }
+#r-codec { width: 0; }
+#rp-right #r-alpha { flex: 0 0 82px; width: 82px; padding-left: 7px; padding-right: 21px; margin-right: -2px; }
+#rp-right #r-depth { flex: 0 0 64px; width: 64px; padding-left: 7px; padding-right: 21px; margin-left: -2px; }
 /* aspect-ratio lock, sits inline in the "Output rect" subtitle */
 .lock-btn {
   display: inline-flex;

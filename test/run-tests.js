@@ -596,6 +596,8 @@ fs.unlinkSync(outWav);
   assert(/No such file/.test(missingSrc[0].detail) && /Command: ffmpeg/.test(missingSrc[0].detail), 'details hold the full technical text');
   ok('missing source explained, details kept');
 
+  await require('./pixel-tests').run(ok, caps.proresPath, tmp);
+
   fs.rmSync(workDir, { recursive: true, force: true });
   try { fs.unlinkSync(stillSrc); } catch (e) { /* gone */ }
 

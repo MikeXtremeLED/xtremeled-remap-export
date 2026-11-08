@@ -2212,6 +2212,29 @@ function refreshClipInfo() {
   el.innerHTML = rows.join('<br>');
 }
 
+// Pixel check card: what the export will really do to this clip, from the same plan buildArgs uses
+const PX_CHECK_ICON = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M2.5 7.6l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const PX_WARN_ICON = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M7 2.2l5.2 9.4H1.8L7 2.2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 6v2.6M7 10.2v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+function refreshPixelCheck() {
+  const card = $('rp-pixel-check');
+  const f = activeFile();
+  const def = currentCodec();
+  if (!f || !f.probe || !def || def.audioOnly) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  const slices = Geometry.effectiveSlices(project);
+  const alpha = $('r-alpha').value !== 'none' && def.alpha.includes($('r-alpha').value);
+  const plan = Codecs.pixelPlan(slices, f.probe, { alpha, transform: f.transform });
+  const fps = f.isImage ? clampInt($('r-fps').value, 1, 240) : f.probe.fps || 25;
+  $('px-rows').innerHTML = Codecs.pixelCheckRows(plan, def.id, fps, f.isImage)
+    .map((r) => `<div class="px-row${r.ok ? '' : ' warn'}">${r.ok ? PX_CHECK_ICON : PX_WARN_ICON}<span class="k">${r.key}</span><span class="v">${r.value}</span></div>`)
+    .join('');
+  $('px-note').textContent = Codecs.codecFidelityNote(def.id);
+}
+
 function scaleLinked(tr) {
   return tr.scaleY == null;
 }
@@ -2221,6 +2244,7 @@ function refreshClipControls() {
   const tr = f ? f.transform : Geometry.defaultTransform();
   $('rp-clip-section').style.opacity = f ? 1 : 0.4;
   refreshClipInfo();
+  refreshPixelCheck();
   $('ct-mode').value = tr.mode;
   $('ct-x').value = tr.x;
   $('ct-y').value = tr.y;
@@ -2278,6 +2302,7 @@ function bindClipControls() {
     fn(f.transform);
     refreshFileList();
     refreshPixelReadout();
+    refreshPixelCheck();
     drawRenderPreview();
     syncExportList();
   };
@@ -2490,6 +2515,7 @@ function refreshCodecUI() {
   }
   if (!def.audioOnly) notes.push(...autoPadNotes());
   $('r-codec-note').textContent = notes.join(' ');
+  refreshPixelCheck();
   renderPreflight();
   // still settings apply when image footage is exported to a video codec
   const anyImage = rp.files.some((f) => f.isImage);
@@ -3652,6 +3678,7 @@ function bindUI() {
   };
   $('r-codec').onchange = refreshCodecUI;
   $('r-alpha').onchange = refreshCodecUI;
+  $('r-fps').addEventListener('input', refreshPixelCheck);
   $('r-same-as-source').onclick = sameAsSource;
   $('r-gpu').checked = localStorage.getItem('xre:gpu') === '1';
   $('r-gpu').onchange = () => {

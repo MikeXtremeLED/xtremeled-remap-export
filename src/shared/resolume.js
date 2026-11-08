@@ -43,8 +43,11 @@
     return undefined;
   }
 
+  // Round the edges, not the sizes: rounding x and w apart makes neighbours overlap by 1 px
   function rnd(r) {
-    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
+    const x = Math.round(r.x);
+    const y = Math.round(r.y);
+    return { x, y, w: Math.round(r.x + r.w) - x, h: Math.round(r.y + r.h) - y };
   }
 
   function parseScreenSetup(xmlText) {
