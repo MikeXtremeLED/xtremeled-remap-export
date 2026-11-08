@@ -1,9 +1,11 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const renderMod = require('./src/main/render');
+const Files = require('./src/main/output-files');
+const Outputs = require('./src/shared/outputs');
 
 app.setName('XtremeLED Remap Export');
 // Desktop tool: allow the preview player to start programmatically (spacebar/UI)
@@ -306,6 +308,34 @@ function makeIcon() {
   });
 }
 
+// Closing during an export asks first; "stop" lets ffmpeg stop and the temporary files go
+// before the window really closes. Not a sync dialog: ffmpeg keeps running behind it.
+let closeAsking = false;
+let closeConfirmed = false;
+function confirmCloseDuringExport(e, target) {
+  if (closeConfirmed || !renderMod.isBusy()) return;
+  e.preventDefault();
+  if (closeAsking) return;
+  closeAsking = true;
+  dialog
+    .showMessageBox(target, {
+      type: 'warning',
+      message: 'An export is still running.',
+      detail: 'Stop it and close the app? The file being exported is removed; finished files are kept.',
+      buttons: ['Keep exporting', 'Stop and close'],
+      defaultId: 0,
+      cancelId: 0,
+    })
+    .then(async ({ response }) => {
+      closeAsking = false;
+      if (response !== 1) return;
+      closeConfirmed = true;
+      renderMod.cancel();
+      await renderMod.whenIdle();
+      if (!target.isDestroyed()) target.close();
+    });
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1560,
@@ -320,6 +350,9 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  const thisWindow = win;
+  win.on('close', (e) => confirmCloseDuringExport(e, thisWindow));
 
   const pageArg = process.argv.find((a) => a.startsWith('--page='));
   const query = {};
@@ -367,6 +400,7 @@ app.whenReady().then(() => {
   createWindow();
 });
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => renderMod.cancel()); // no ffmpeg left behind, whatever ended the app
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
@@ -459,8 +493,16 @@ ipcMain.handle('path:join', (e, ...parts) => path.join(...parts));
 ipcMain.handle('path:toFileUrl', (e, p) => require('url').pathToFileURL(p).href);
 
 ipcMain.handle('ffmpeg:caps', () => renderMod.getCapabilities());
-ipcMain.handle('render:start', (e, payload) => renderMod.startBatch(win, payload));
+ipcMain.handle('render:start', async (e, payload) => {
+  const sleepBlock = powerSaveBlocker.start('prevent-app-suspension');
+  try {
+    return await renderMod.startBatch(BrowserWindow.fromWebContents(e.sender), payload);
+  } finally {
+    powerSaveBlocker.stop(sleepBlock);
+  }
+});
 ipcMain.handle('render:cancel', () => renderMod.cancel());
+ipcMain.handle('render:existing', (e, targets) => renderMod.existingOutputs(targets));
 ipcMain.handle('preview:probe', (e, src) => {
   const caps = renderMod.getCapabilities();
   if (!caps.proresPath) throw new Error('ffmpeg not found');
@@ -481,7 +523,10 @@ const MEDIA_EXTS = new Set([
   'mov', 'mp4', 'm4v', 'avi', 'mkv', 'mxf', 'webm', 'mpg', 'mpeg',
 ]);
 let watcher = null;
-const watchPending = new Map(); // path -> {size, timer}
+const watchPending = new Map(); // path -> {size, mtime, since, timer}
+const WATCH_POLL_MS = 1000;
+const WATCH_STABLE_MS = 5000;
+let watchTarget = null; // the window that started the watch
 
 function stopWatch() {
   if (watcher) {
@@ -492,38 +537,43 @@ function stopWatch() {
   watchPending.clear();
 }
 
-// Wait until the file size is stable (copy finished), then notify the renderer
+// A file counts as arrived once it has not changed for a while and, on Windows, nobody is
+// still writing it: during a copy Windows reports the full size from the start.
 function scheduleStableCheck(fullPath) {
   const check = () => {
-    let size = -1;
+    let st;
     try {
-      size = fs.statSync(fullPath).size;
+      st = fs.statSync(fullPath);
     } catch (e) {
       watchPending.delete(fullPath);
       return;
     }
     const prev = watchPending.get(fullPath);
-    if (prev && prev.size === size && size > 0) {
+    const unchanged = prev && prev.size === st.size && prev.mtime === st.mtimeMs && st.size > 0;
+    const since = unchanged ? prev.since : Date.now();
+    if (unchanged && Date.now() - since >= WATCH_STABLE_MS && !Files.fileIsBusy(fullPath)) {
       watchPending.delete(fullPath);
-      if (win && !win.isDestroyed()) win.webContents.send('watch:file', fullPath);
+      if (watchTarget && !watchTarget.isDestroyed()) watchTarget.webContents.send('watch:file', fullPath);
     } else {
-      watchPending.set(fullPath, { size, timer: setTimeout(check, 900) });
+      watchPending.set(fullPath, { size: st.size, mtime: st.mtimeMs, since, timer: setTimeout(check, WATCH_POLL_MS) });
     }
   };
   const existing = watchPending.get(fullPath);
   if (existing) clearTimeout(existing.timer);
-  watchPending.set(fullPath, { size: -2, timer: setTimeout(check, 900) });
+  watchPending.set(fullPath, { size: -2, mtime: 0, since: 0, timer: setTimeout(check, WATCH_POLL_MS) });
 }
 
 ipcMain.handle('watch:start', (e, dir) => {
   stopWatch();
+  watchTarget = BrowserWindow.fromWebContents(e.sender);
   const existing = new Set(fs.readdirSync(dir));
   watcher = fs.watch(dir, (event, filename) => {
     if (!filename) return;
     const ext = path.extname(filename).toLowerCase().replace('.', '');
     if (!MEDIA_EXTS.has(ext)) return;
-    if (filename.startsWith('.')) return;
+    if (filename.startsWith('.') || Outputs.isTempName(filename)) return;
     const fullPath = path.join(dir, filename);
+    if (renderMod.isOwnOutput(fullPath)) return; // never re-export what this app just wrote
     if (existing.has(filename) && !watchPending.has(fullPath)) return;
     existing.add(filename);
     if (!fs.existsSync(fullPath)) return;

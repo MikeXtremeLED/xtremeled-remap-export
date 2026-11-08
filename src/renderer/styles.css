@@ -386,6 +386,16 @@ select { width: auto; }
 .render-log .err.log-row .x { flex-shrink: 0; }
 .render-log .err.log-row .msg { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
 .render-log .err.log-row a { white-space: nowrap; margin-left: 2px; cursor: pointer; text-decoration: underline; }
+.render-log .ok.log-row, .render-log .warn.log-row { display: flex; gap: 6px; padding: 5px 0; border-top: 1px solid var(--border); line-height: 1.45; color: var(--text); }
+.render-log .log-row:first-child { border-top: none; }
+.render-log .log-row .chk { color: var(--ok); font-weight: 700; flex-shrink: 0; }
+.render-log .warn.log-row .chk { color: var(--accent-hi); }
+.render-log .ok.log-row .msg, .render-log .warn.log-row .msg { min-width: 0; overflow-wrap: anywhere; }
+.render-log .ok.log-row a, .render-log .warn.log-row a { white-space: nowrap; cursor: pointer; text-decoration: underline; }
+.w-conflict { font-size: 11px; line-height: 1.45; color: var(--accent-hi); margin: 6px 0 0; }
+.exists-list { background: #1a1d1f; border: 1px solid var(--border); border-radius: 4px; max-height: 220px; overflow-y: auto; }
+.exists-list div { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.exists-list div:last-child { border-bottom: none; }
 
 .progress-bar > div.state-ok { background: var(--ok); }
 .progress-bar > div.state-partial { background: var(--accent); }

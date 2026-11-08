@@ -597,6 +597,7 @@ fs.unlinkSync(outWav);
   ok('missing source explained, details kept');
 
   await require('./pixel-tests').run(ok, caps.proresPath, tmp);
+  await require('./safe-export-tests').run(ok, caps.proresPath, tmp);
 
   fs.rmSync(workDir, { recursive: true, force: true });
   try { fs.unlinkSync(stillSrc); } catch (e) { /* gone */ }

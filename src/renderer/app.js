@@ -1387,6 +1387,42 @@ function openSplitModal() {
   };
 }
 
+// Asked once per batch when outputs already exist: 'overwrite', 'version', 'skip' or null (cancel)
+function askExisting(names, canSkip) {
+  return new Promise((resolve) => {
+    const title = names.length > 1 ? `These files already exist (${names.length})` : 'This file already exists';
+    openModal(`
+      <div class="modal" style="width:460px">
+        <div class="modal-head"><span id="m-title"></span><button class="close-x" id="m-close">✕</button></div>
+        <div class="modal-body"><div class="exists-list" id="m-list"></div></div>
+        <div class="modal-foot">
+          <button id="m-cancel">Cancel</button>
+          ${canSkip ? '<button id="m-skip">Skip these</button>' : ''}
+          <button id="m-overwrite">Overwrite</button>
+          <button id="m-version" class="accent">New version (_v2)</button>
+        </div>
+      </div>
+    `);
+    $('m-title').textContent = title;
+    names.forEach((n) => {
+      const row = document.createElement('div');
+      row.textContent = n;
+      row.title = n;
+      $('m-list').appendChild(row);
+    });
+    const done = (val) => {
+      closeModal();
+      resolve(val);
+    };
+    $('m-close').onclick = () => done(null);
+    $('m-cancel').onclick = () => done(null);
+    if (canSkip) $('m-skip').onclick = () => done('skip');
+    $('m-overwrite').onclick = () => done('overwrite');
+    $('m-version').onclick = () => done('version');
+    $('m-version').focus();
+  });
+}
+
 // Ask how to export multiple screens: separate / merged / both
 function askOutputMode() {
   return new Promise((resolve) => {
@@ -1524,6 +1560,8 @@ const rp = {
   activeIndex: -1,
   destDir: null,
   running: false,
+  cancelRequested: false,
+  retryTimers: new Set(),
   viewMode: 'input',
   screenId: null,
   watchDir: null,
@@ -1829,6 +1867,7 @@ async function addFootage(paths, opts) {
     const pp = await api.pathParse(rp.files[0].path);
     rp.destDir = pp.dir;
     $('r-dest').textContent = rp.destDir;
+    updateWatchConflict();
   }
   syncExportList();
   if ((rp.activeIndex < 0 || (opts && opts.select)) && firstNew >= 0) {
@@ -2693,8 +2732,39 @@ function buildMergedProject() {
 }
 
 // ---------------- start export ----------------
+// Marked busy before the first await, so a second start (a watch file, a double click) can't slip in
 async function startRender(filesOverride, optsOverride) {
   if (rp.running) return;
+  rp.running = true;
+  updateStartButton();
+  try {
+    await runExport(filesOverride, optsOverride);
+  } finally {
+    rp.running = false;
+    updateStartButton();
+    $('rp-add').disabled = false;
+    processWatchQueue();
+  }
+}
+
+// Decides what happens with outputs that already exist; null means the export is called off
+async function resolveExisting(jobs, isAuto) {
+  if (isAuto) return { jobs, policy: 'version', skipped: [] };
+  const found = await api.outputsExisting(jobs.map((j) => j.outDir || j.outPath));
+  if (!found.length) return { jobs, policy: 'overwrite', skipped: [] };
+  const choice = await askExisting(found.map(baseName), found.length < jobs.length);
+  if (!choice) return null;
+  if (choice !== 'skip') return { jobs, policy: choice, skipped: [] };
+  const hit = new Set(found);
+  const isHit = (j) => hit.has(j.outDir || j.outPath);
+  return { jobs: jobs.filter((j) => !isHit(j)), policy: 'overwrite', skipped: jobs.filter(isHit) };
+}
+
+function logSkipped(skipped) {
+  for (const j of skipped) logNote(`Skipped ${baseName(j.outDir || j.outPath)}: it already exists.`);
+}
+
+async function runExport(filesOverride, optsOverride) {
   stopPlayback(false);
   const files = filesOverride || rp.files.filter((f) => f.selected !== false);
   if (!files.length) return;
@@ -2727,16 +2797,16 @@ async function startRender(filesOverride, optsOverride) {
         label: `${baseName(f.path)} → WAV`,
       });
     }
+    const wavPlan = await resolveExisting(wavJobs, !!filesOverride);
+    if (!wavPlan) return;
     beginExportUI();
+    logSkipped(wavPlan.skipped);
     try {
-      await api.renderStart({ project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices }, jobs: wavJobs, codec: codecId, depth, fps, imageDuration });
+      const wavResults = await api.renderStart({ project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices }, jobs: wavPlan.jobs, codec: codecId, depth, fps, imageDuration, existingPolicy: wavPlan.policy });
+      if (filesOverride) scheduleAutoRetries(filesOverride, wavResults);
     } catch (err) {
-      failExportUI(err, wavJobs.length);
+      failExportUI(err, wavPlan.jobs.length);
     }
-    rp.running = false;
-    updateStartButton();
-    $('rp-add').disabled = false;
-    processWatchQueue();
     return;
   }
 
@@ -2812,7 +2882,10 @@ async function startRender(filesOverride, optsOverride) {
     }
   }
 
+  const plan = await resolveExisting(jobs, !!filesOverride);
+  if (!plan) return;
   beginExportUI();
+  logSkipped(plan.skipped);
 
   const payload = {
     project: {
@@ -2821,7 +2894,7 @@ async function startRender(filesOverride, optsOverride) {
       screens: project.screens,
       slices: project.slices,
     },
-    jobs,
+    jobs: plan.jobs,
     codec: codecId,
     alpha,
     depth,
@@ -2829,20 +2902,18 @@ async function startRender(filesOverride, optsOverride) {
     fps,
     imageDuration,
     gpu,
+    existingPolicy: plan.policy,
   };
   try {
-    await api.renderStart(payload);
+    const results = await api.renderStart(payload);
+    if (filesOverride) scheduleAutoRetries(filesOverride, results);
   } catch (err) {
-    failExportUI(err, jobs.length);
+    failExportUI(err, plan.jobs.length);
   }
-  rp.running = false;
-  updateStartButton();
-  $('rp-add').disabled = false;
-  processWatchQueue();
 }
 
 function beginExportUI() {
-  rp.running = true;
+  rp.cancelRequested = false;
   updateStartButton();
   $('rp-add').disabled = true;
   $('r-progress').style.display = '';
@@ -2854,8 +2925,8 @@ function beginExportUI() {
 }
 
 // End state of the bar: the real outcome, and no Cancel any more
-function showBatchOutcome(okCount, total, cancelled) {
-  const o = Codecs.batchOutcome(okCount, total, cancelled);
+function showBatchOutcome(okCount, total, cancelled, warned) {
+  const o = Codecs.batchOutcome(okCount, total, cancelled, warned);
   const bar = $('r-bar'), plabel = $('r-plabel');
   bar.className = `state-${o.state}`;
   if (!cancelled) bar.style.width = '100%';
@@ -2899,6 +2970,39 @@ function addErrorRow(label, message, detail) {
   log.scrollTop = log.scrollHeight;
 }
 
+function logNote(text) {
+  const log = $('r-log');
+  if (!log) return;
+  const div = document.createElement('div');
+  div.textContent = `ℹ ${text}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+// The finished row: what was read back from the file, or what differs from what was asked
+function addDoneRow(ev) {
+  const log = $('r-log');
+  const warned = ev.check.warnings.length > 0;
+  const [first, second] = Outputs.summaryLines(ev.check);
+  const label = `${ev.label || baseName(ev.out)}${ev.paddedTo ? ` (padded to ${ev.paddedTo})` : ''}`;
+  const div = document.createElement('div');
+  div.className = `${warned ? 'warn' : 'ok'} log-row`;
+  const mark = document.createElement('span');
+  mark.className = 'chk';
+  mark.textContent = warned ? '⚠' : '✓';
+  const msg = document.createElement('span');
+  msg.className = 'msg';
+  msg.append(`${label}: ${first}`, document.createElement('br'), `${second}${ev.savedAs ? ` · saved as ${ev.savedAs}` : ''} `);
+  const a = document.createElement('a');
+  a.href = '#';
+  a.textContent = `show in ${FILE_MANAGER}`;
+  a.onclick = (e) => { e.preventDefault(); api.showInFolder(ev.out); };
+  msg.appendChild(a);
+  div.append(mark, msg);
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
 function onRenderEvent(ev) {
   const bar = $('r-bar'), plabel = $('r-plabel'), ppct = $('r-ppct'), log = $('r-log');
   if (!bar) return;
@@ -2910,32 +3014,26 @@ function onRenderEvent(ev) {
   } else if (ev.type === 'progress') {
     bar.style.width = `${ev.index * jobPart + (ev.percent / 100) * jobPart}%`;
     ppct.textContent = `${Math.round(ev.percent)}%`;
+  } else if (ev.type === 'job-verify') {
+    plabel.textContent = `(${ev.index + 1}/${ev.total}) Checking ${ev.label || baseName(ev.file)}`;
   } else if (ev.type === 'job-note') {
-    const div = document.createElement('div');
-    div.textContent = `ℹ ${ev.note}`;
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
+    logNote(ev.note);
   } else if (ev.type === 'job-done') {
     bar.style.width = `${(ev.index + 1) * jobPart}%`;
-    const div = document.createElement('div');
-    div.className = 'ok';
-    div.textContent = `✓ ${ev.label || baseName(ev.out)}${ev.paddedTo ? ` (padded to ${ev.paddedTo})` : ''} `;
-    const a = document.createElement('a');
-    a.href = '#';
-    a.textContent = `show in ${FILE_MANAGER}`;
-    a.onclick = (e) => { e.preventDefault(); api.showInFolder(ev.out); };
-    div.appendChild(a);
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
+    addDoneRow(ev);
   } else if (ev.type === 'job-error') {
     addErrorRow(ev.label || '', String(ev.error), ev.detail);
   } else if (ev.type === 'batch-done') {
     const results = ev.results || [];
-    showBatchOutcome(results.filter((r) => r.ok).length, ev.total || results.length, ev.cancelled);
+    const warned = results.filter((r) => r.ok && r.check && r.check.warnings.length).length;
+    showBatchOutcome(results.filter((r) => r.ok).length, ev.total || results.length, ev.cancelled, warned);
   }
 }
 
 // ---------------- watch folder ----------------
+const WATCH_MAX_ATTEMPTS = 3;
+const WATCH_RETRY_SEC = 15;
+
 async function onWatchFile(p) {
   if (rp.files.some((f) => f.path === p)) return;
   await addFootage([p]);
@@ -2948,14 +3046,54 @@ async function onWatchFile(p) {
   }
   if ($('w-auto').checked) {
     const f = rp.files.find((x) => x.path === p);
-    if (f) {
-      if (rp.running) {
-        rp.watchQueue.push(f);
-      } else {
-        startRender([f], { mode: localStorage.getItem('xre:outmode') || 'separate' });
-      }
-    }
+    if (f) queueAutoExport(f);
   }
+}
+
+// An empty output folder means "next to the footage", which for a watched file is the watch folder
+function outputIsWatchFolder() {
+  return !!rp.watchDir && (!rp.destDir || Outputs.samePath(rp.destDir, rp.watchDir));
+}
+
+function updateWatchConflict() {
+  $('w-conflict').classList.toggle('hidden', !($('w-auto').checked && outputIsWatchFolder()));
+}
+
+function queueAutoExport(f) {
+  if (outputIsWatchFolder()) {
+    logNote(`${baseName(f.path)} was not exported automatically: the output folder is the watch folder.`);
+    return;
+  }
+  if (rp.running) rp.watchQueue.push(f);
+  else startRender([f], { mode: localStorage.getItem('xre:outmode') || 'separate' });
+}
+
+// A failed auto export is tried again (the source may still have been in use). Only when every
+// output of that clip failed: a retry after a partial success would write its good files twice.
+function scheduleAutoRetries(files, results) {
+  if (rp.cancelRequested || !results) return;
+  for (const f of files) {
+    const own = results.filter((r) => r.src === f.path);
+    if (!own.length || own.some((r) => r.ok)) continue;
+    f.watchFails = (f.watchFails || 0) + 1;
+    if (f.watchFails >= WATCH_MAX_ATTEMPTS) continue;
+    logNote(`Trying ${baseName(f.path)} again in ${WATCH_RETRY_SEC} s (attempt ${f.watchFails + 1} of ${WATCH_MAX_ATTEMPTS}).`);
+    const timer = setTimeout(() => {
+      rp.retryTimers.delete(timer);
+      if (rp.watching && rp.files.includes(f)) queueAutoExport(f);
+    }, WATCH_RETRY_SEC * 1000);
+    rp.retryTimers.add(timer);
+  }
+}
+
+// Cancel means everything: the running export, what is queued and what was waiting to retry
+function cancelEverything() {
+  rp.cancelRequested = true;
+  const queued = rp.watchQueue.splice(0).length + rp.retryTimers.size;
+  rp.retryTimers.forEach((t) => clearTimeout(t));
+  rp.retryTimers.clear();
+  if (queued) logNote(`${queued} waiting ${queued === 1 ? 'file was' : 'files were'} not exported.`);
+  api.renderCancel();
 }
 
 function processWatchQueue() {
@@ -3690,10 +3828,11 @@ function bindUI() {
     if (dir) {
       rp.destDir = dir;
       $('r-dest').textContent = dir;
+      updateWatchConflict();
     }
   };
   $('r-start').onclick = () => startRender();
-  $('r-cancel').onclick = () => api.renderCancel();
+  $('r-cancel').onclick = cancelEverything;
   bindClipControls();
   bindTimeline();
   bindPreviewDrag();
@@ -3704,7 +3843,9 @@ function bindUI() {
     rp.watchDir = dir;
     $('w-dir').textContent = dir;
     $('w-toggle').disabled = false;
+    updateWatchConflict();
   };
+  $('w-auto').onchange = updateWatchConflict;
   $('w-toggle').onclick = async () => {
     if (!rp.watchDir) return;
     if (rp.watching) {

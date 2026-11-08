@@ -373,10 +373,11 @@
   }
 
   // What the export bar shows when a batch has ended
-  function batchOutcome(okCount, total, cancelled) {
+  function batchOutcome(okCount, total, cancelled, warned) {
     const failed = Math.max(0, total - okCount);
     if (cancelled) return { state: 'cancelled', text: `Cancelled: ${okCount} of ${total} exported` };
     if (okCount <= 0) return { state: 'fail', text: `0 of ${total} exported` };
+    if (failed === 0 && warned > 0) return { state: 'partial', text: total === 1 ? 'Exported with a warning' : `All ${total} exported, ${warned} with a warning` };
     if (failed === 0) return { state: 'ok', text: total === 1 ? 'Exported' : `All ${total} exported` };
     return { state: 'partial', text: `${okCount} of ${total} exported, ${failed} failed` };
   }

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('xre', {
   previewFrame: (src, timeSec) => ipcRenderer.invoke('preview:frame', src, timeSec),
   renderStart: (payload) => ipcRenderer.invoke('render:start', payload),
   renderCancel: () => ipcRenderer.invoke('render:cancel'),
+  outputsExisting: (targets) => ipcRenderer.invoke('render:existing', targets),
   watchStart: (dir) => ipcRenderer.invoke('watch:start', dir),
   watchStop: () => ipcRenderer.invoke('watch:stop'),
   getPathForFile: (file) => webUtils.getPathForFile(file),

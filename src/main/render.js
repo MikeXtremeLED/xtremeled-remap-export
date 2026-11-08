@@ -8,6 +8,8 @@ const path = require('path');
 const Geometry = require('../shared/geometry');
 const Codecs = require('../shared/codecs');
 const { explainError, checkOutputDir } = require('./errors');
+const Outputs = require('../shared/outputs');
+const Files = require('./output-files');
 
 // Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg-<arch>).
 // Native binary per architecture: Intel (x64), Apple Silicon (arm64), Windows (win64).
@@ -30,8 +32,10 @@ try {
   /* optional */
 }
 
-let currentProc = null;
+const activeProcs = new Set();
 let cancelled = false;
+let batchActive = false;
+let idleWaiters = [];
 let capsCache = null;
 
 function candidateFfmpegs() {
@@ -340,7 +344,7 @@ function buildArgs(project, job, opts, probe) {
       job.outPath,
     ];
     const aDur = aOut ? aOut - aIn : probe && probe.durationSec ? probe.durationSec - aIn : null;
-    return { args, durationSec: aDur };
+    return { args, durationSec: aDur, expect: { kind: 'audio', audio: true, durationSec: aDur } };
   }
 
   const IW = Math.max(1, Math.round(project.input.width));
@@ -514,13 +518,25 @@ function buildArgs(project, job, opts, probe) {
         : probe && probe.durationSec
           ? probe.durationSec - inSec
           : null;
-  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null };
+  // A trim that runs past the end of the clip stops at the end of the clip
+  const remaining = !job.isImage && probe && probe.durationSec ? probe.durationSec - inSec : null;
+  const expectSec = totalDur != null && remaining != null ? Math.min(totalDur, remaining) : totalDur;
+  const fpsKnown = job.isImage || (probe && probe.fps);
+  const expect = {
+    kind: isSeq ? 'sequence' : isStill ? 'still' : 'video',
+    width: OW,
+    height: OH,
+    codec: Outputs.probedCodec(opts.codec),
+    frames: expectSec != null && fpsKnown ? Math.round(expectSec * fps) : null,
+    hasAudio: !!(probe && probe.hasAudio),
+  };
+  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null, expect };
 }
 
 function runFfmpeg(ffPath, args, durationSec, onProgress) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffPath, args);
-    currentProc = proc;
+    activeProcs.add(proc);
     let stderrTail = '';
     let stdoutBuf = '';
 
@@ -541,11 +557,11 @@ function runFfmpeg(ffPath, args, durationSec, onProgress) {
       }
     });
     proc.on('error', (err) => {
-      currentProc = null;
+      activeProcs.delete(proc);
       reject(err);
     });
     proc.on('close', (code) => {
-      currentProc = null;
+      activeProcs.delete(proc);
       if (cancelled) return reject(new Error('Cancelled'));
       if (code === 0) return resolve();
       const err = new Error(`ffmpeg error (code ${code}):\n${stderrTail}`);
@@ -563,7 +579,81 @@ function send(win, data) {
   }
 }
 
+// Counts the video packets without decoding: about a second for a 70 MB 4K file.
+// null when ffmpeg can't tell; a cancel rejects.
+function countFrames(ffPath, file) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffPath, ['-hide_banner', '-i', file, '-map', '0:v:0', '-c', 'copy', '-f', 'null', '-progress', 'pipe:1', '-nostats', '-']);
+    activeProcs.add(proc);
+    let out = '';
+    proc.stdout.on('data', (d) => { out = (out + d.toString()).slice(-2000); });
+    proc.stderr.on('data', () => {});
+    proc.on('error', () => {
+      activeProcs.delete(proc);
+      resolve(null);
+    });
+    proc.on('close', (code) => {
+      activeProcs.delete(proc);
+      if (cancelled) return reject(new Error('Cancelled'));
+      const all = out.match(/^frame=\s*(\d+)/gm);
+      resolve(code === 0 && all ? parseInt(all[all.length - 1].replace(/\D/g, ''), 10) : null);
+    });
+  });
+}
+
+function folderBytes(dir, names) {
+  return names.reduce((sum, n) => sum + fs.statSync(path.join(dir, n)).size, 0);
+}
+
+// Reads the finished file back. {problem} when it can't be used at all; otherwise the row
+// for the log, with warnings when it differs from what was asked.
+async function verifyOutput(ffPath, file, expect) {
+  let probe, frames = null, sizeBytes;
+  if (expect.kind === 'sequence') {
+    const names = fs.readdirSync(file).filter((n) => n.toLowerCase().endsWith('.png')).sort();
+    if (!names.length) return { problem: 'The export wrote no frames.' };
+    probe = probeMedia(ffPath, path.join(file, names[0]));
+    frames = names.length;
+    sizeBytes = folderBytes(file, names);
+  } else {
+    sizeBytes = fs.statSync(file).size;
+    probe = probeMedia(ffPath, file);
+    if (expect.kind === 'video') frames = await countFrames(ffPath, file);
+  }
+  if (expect.kind === 'audio') {
+    if (!probe.hasAudio) return { problem: 'The exported file cannot be read back.' };
+  } else {
+    if (!probe.videoCodec) return { problem: 'The exported file cannot be read back.' };
+    if (frames === 0) return { problem: 'The export wrote no frames.' };
+  }
+  const actual = { width: probe.width, height: probe.height, codec: probe.videoCodec, frames, durationSec: probe.durationSec };
+  return {
+    kind: expect.kind,
+    width: probe.width,
+    height: probe.height,
+    frames,
+    durationSec: probe.durationSec,
+    sizeBytes,
+    warnings: Outputs.compareOutput(actual, expect),
+  };
+}
+
+// One batch at a time: a second request is refused rather than run next to the first
 async function startBatch(win, payload) {
+  if (batchActive) throw new Error('An export is already running.');
+  batchActive = true;
+  try {
+    return await runBatch(win, payload);
+  } finally {
+    batchActive = false;
+    idleWaiters.splice(0).forEach((done) => done());
+  }
+}
+
+const isBusy = () => batchActive;
+const whenIdle = () => (batchActive ? new Promise((done) => idleWaiters.push(done)) : Promise.resolve());
+
+async function runBatch(win, payload) {
   cancelled = false;
   const { jobs, codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu } = payload;
   const ffPath = ffmpegForCodec(codec);
@@ -578,6 +668,7 @@ async function startBatch(win, payload) {
   }
 
   const results = [];
+  const taken = new Set();
   for (let i = 0; i < jobs.length; i++) {
     if (cancelled) break;
     const job = jobs[i];
@@ -590,38 +681,67 @@ async function startBatch(win, payload) {
       continue;
     }
     let paddedTo = null;
+    const isDir = !!job.outDir;
+    let partial = null;
     try {
-      // PNG sequence: ensure the output folder exists
-      if (job.outDir) fs.mkdirSync(job.outDir, { recursive: true });
+      const requested = job.outDir || job.outPath;
+      let target = Files.resolveTarget(requested, isDir, payload.existingPolicy, taken);
+      Files.markOwn(target);
+      partial = Files.partialFor(target, isDir);
+      // Everything renders under a temporary name; the previous export stays until this one is proven good
+      if (isDir) {
+        Files.discard(partial); // frames of an earlier interrupted run
+        fs.mkdirSync(partial, { recursive: true });
+      }
+      const workJob = isDir
+        ? { ...job, outDir: partial, outPath: path.join(partial, path.basename(job.outPath)) }
+        : { ...job, outPath: partial };
       const probe = probeMedia(ffPath, job.src);
       const opts = { codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu };
       const onPct = (pct) => send(win, { type: 'progress', index: i, total: jobs.length, percent: pct });
+      let expect;
       try {
-        const built = buildArgs(project, job, opts, probe);
+        const built = buildArgs(project, workJob, opts, probe);
         paddedTo = built.paddedTo;
+        expect = built.expect;
         await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
       } catch (gpuErr) {
         // GPU (VideoToolbox) not available on this machine/codec -> retry on CPU
         if (!gpu || cancelled || !Codecs.gpuCapable(codec)) throw gpuErr;
         send(win, { type: 'job-note', index: i, total: jobs.length, note: 'GPU encoder unavailable — falling back to CPU', label: job.label });
-        const built = buildArgs(project, job, { ...opts, gpu: false, keepGpuSize: true }, probe);
+        const built = buildArgs(project, workJob, { ...opts, gpu: false, keepGpuSize: true }, probe);
         paddedTo = built.paddedTo;
+        expect = built.expect;
         await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
       }
       // PNG has no container metadata — stamp the tEXt chunk into the file(s)
       if (codec === 'png') {
-        stampPng(job.outPath, 'Exported by XtremeLED');
-      } else if (codec === 'png_seq' && job.outDir) {
+        stampPng(partial, 'Exported by XtremeLED');
+      } else if (codec === 'png_seq' && isDir) {
         try {
-          for (const fn of fs.readdirSync(job.outDir)) {
-            if (fn.toLowerCase().endsWith('.png')) stampPng(path.join(job.outDir, fn), 'Exported by XtremeLED');
+          for (const fn of fs.readdirSync(partial)) {
+            if (fn.toLowerCase().endsWith('.png')) stampPng(path.join(partial, fn), 'Exported by XtremeLED');
           }
         } catch (e) { /* best-effort */ }
       }
-      const shown = job.outDir || job.outPath;
-      results.push({ src: job.src, out: shown, ok: true, paddedTo });
-      send(win, { type: 'job-done', index: i, total: jobs.length, out: shown, label: job.label, paddedTo });
+      send(win, { type: 'job-verify', index: i, total: jobs.length, label: job.label, file: job.src });
+      const check = await verifyOutput(ffPath, partial, expect);
+      if (check.problem) throw new Error(check.problem);
+      if (cancelled) throw new Error('Cancelled');
+      // A file with a warning never takes the place of an earlier export; with versions on,
+      // neither does a name that appeared while this one was rendering
+      const mayReplace = payload.existingPolicy !== 'version' && !check.warnings.length;
+      if (!mayReplace && fs.existsSync(target)) target = Files.claimVersion(target, isDir, taken);
+      Files.markOwn(target);
+      await Files.promote(partial, target, isDir);
+      partial = null;
+      const savedAs = target === requested ? null : path.basename(target);
+      results.push({ src: job.src, out: target, ok: true, paddedTo, check, savedAs });
+      send(win, { type: 'job-done', index: i, total: jobs.length, out: target, label: job.label, paddedTo, check, savedAs });
     } catch (err) {
+      if (partial && !(err && err.keepPartial)) {
+        try { Files.discard(partial); } catch (e) { /* locked: it keeps its temporary name */ }
+      }
       const info = explainError(err, { src: job.src, out: job.outDir || job.outPath });
       const detail = info.detail == null ? null : [
         `Source: ${job.src}`,
@@ -641,9 +761,9 @@ async function startBatch(win, payload) {
 
 function cancel() {
   cancelled = true;
-  if (currentProc) {
+  for (const proc of activeProcs) {
     try {
-      currentProc.kill('SIGKILL');
+      proc.kill('SIGKILL');
     } catch (e) {
       /* already stopped */
     }
@@ -662,4 +782,8 @@ module.exports = {
   runFfmpeg,
   startBatch,
   cancel,
+  isBusy,
+  whenIdle,
+  isOwnOutput: Files.isOwnOutput,
+  existingOutputs: Files.existingOutputs,
 };
