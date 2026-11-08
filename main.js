@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -438,6 +438,8 @@ ipcMain.handle('file:writeTempDataUrl', (e, name, dataUrl) => {
   fs.writeFileSync(p, Buffer.from(m[1], 'base64'));
   return p;
 });
+
+ipcMain.handle('clipboard:writeText', (e, text) => clipboard.writeText(String(text)));
 
 ipcMain.handle('shell:showInFolder', (e, p) => {
   shell.showItemInFolder(p);

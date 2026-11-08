@@ -10,6 +10,7 @@
   --accent-dim: rgba(247, 148, 30, 0.14);
   --accent-text: #241503;
   --danger: #e05555;
+  --ok: #4fbf72;
 }
 
 * { box-sizing: border-box; }
@@ -362,6 +363,34 @@ select { width: auto; }
 .render-log .ok { color: var(--accent-hi); }
 .render-log .err { color: var(--danger); }
 .render-log a { color: var(--accent-hi); }
+.render-log .err.log-row { display: flex; gap: 6px; padding: 5px 0; border-top: 1px solid var(--border); line-height: 1.45; }
+.render-log .err.log-row:first-child { border-top: none; }
+.render-log .err.log-row .x { flex-shrink: 0; }
+.render-log .err.log-row .msg { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.render-log .err.log-row a { white-space: nowrap; margin-left: 2px; cursor: pointer; text-decoration: underline; }
+
+.progress-bar > div.state-ok { background: var(--ok); }
+.progress-bar > div.state-partial { background: var(--accent); }
+.progress-bar > div.state-fail { background: var(--danger); }
+.progress-bar > div.state-cancelled { background: var(--dim); }
+#r-plabel.state-ok { color: var(--ok); font-weight: 600; }
+#r-plabel.state-partial { color: var(--accent-hi); font-weight: 600; }
+#r-plabel.state-fail { color: var(--danger); font-weight: 600; }
+
+.preflight {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--accent-hi);
+  background: var(--accent-dim);
+  border: 1px solid rgba(247, 148, 30, 0.45);
+  border-radius: 4px;
+  padding: 7px 8px;
+  margin-bottom: 8px;
+}
+.preflight .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.preflight .actions button { padding: 3px 8px; font-size: 11px; }
+.preflight.flash { animation: preflight-flash 0.5s ease-out 2; }
+@keyframes preflight-flash { 50% { border-color: var(--accent-hi); background: rgba(247, 148, 30, 0.34); } }
 
 .radio-col { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
 .radio-col label { display: flex; gap: 8px; align-items: center; cursor: pointer; }

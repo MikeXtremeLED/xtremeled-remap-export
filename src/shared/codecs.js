@@ -140,5 +140,52 @@
     }
   }
 
-  return { CODECS, byId, matchSource, encoderArgs, gpuCapable };
+  // Output size constraints. modW/modH: the encoder (or its chroma layout) needs multiples of
+  // this. strict: the encoder refuses other sizes, so padding needs the user's OK first.
+  // ProRes 4444, DXV and PNG take any size, so they stay exact (no black row or column).
+  function sizeRule(codecId, opt) {
+    if (['hap', 'hap_q', 'dxv_hq'].includes(codecId)) return { modW: 4, modH: 4, strict: true };
+    // VideoToolbox's size limits can't be verified here, so stay on the safe side when GPU is on
+    if (opt && opt.gpu && gpuCapable(codecId)) return { modW: 2, modH: 2, strict: false };
+    if (['h264', 'hevc'].includes(codecId)) return { modW: 2, modH: 2, strict: false }; // 4:2:0
+    if (['prores_proxy', 'prores_lt', 'prores_422', 'prores_hq'].includes(codecId)) return { modW: 2, modH: 1, strict: false }; // 4:2:2
+    return { modW: 1, modH: 1, strict: false };
+  }
+
+  // The size a codec will really write for a requested canvas (padding goes right and bottom)
+  function fitOutputSize(codecId, width, height, opt) {
+    const rule = sizeRule(codecId, opt);
+    const reqW = Math.max(1, Math.round(width));
+    const reqH = Math.max(1, Math.round(height));
+    const w = Math.ceil(reqW / rule.modW) * rule.modW;
+    const h = Math.ceil(reqH / rule.modH) * rule.modH;
+    return { width: w, height: h, reqW, reqH, padded: w !== reqW || h !== reqH, rule };
+  }
+
+  // Plain-text problem for a size the encoder refuses, or null when the size is fine
+  function sizeProblem(codecId, width, height, opt) {
+    const fit = fitOutputSize(codecId, width, height, opt);
+    if (!fit.rule.strict || !fit.padded) return null;
+    const def = byId(codecId);
+    const which = fit.width !== fit.reqW && fit.height !== fit.reqH ? 'width and height' : fit.width !== fit.reqW ? 'width' : 'height';
+    return {
+      codec: def ? def.label : codecId,
+      reqW: fit.reqW,
+      reqH: fit.reqH,
+      width: fit.width,
+      height: fit.height,
+      message: `${def ? def.label : codecId} can't make ${fit.reqW}×${fit.reqH}: ${which} must be divisible by ${fit.rule.modW}`,
+    };
+  }
+
+  // What the export bar shows when a batch has ended
+  function batchOutcome(okCount, total, cancelled) {
+    const failed = Math.max(0, total - okCount);
+    if (cancelled) return { state: 'cancelled', text: `Cancelled: ${okCount} of ${total} exported` };
+    if (okCount <= 0) return { state: 'fail', text: `0 of ${total} exported` };
+    if (failed === 0) return { state: 'ok', text: total === 1 ? 'Exported' : `All ${total} exported` };
+    return { state: 'partial', text: `${okCount} of ${total} exported, ${failed} failed` };
+  }
+
+  return { CODECS, byId, matchSource, encoderArgs, gpuCapable, sizeRule, fitOutputSize, sizeProblem, batchOutcome };
 });

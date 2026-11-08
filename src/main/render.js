@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const Geometry = require('../shared/geometry');
 const Codecs = require('../shared/codecs');
+const { explainError, checkOutputDir } = require('./errors');
 
 // Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg-<arch>).
 // Native binary per architecture: Intel (x64), Apple Silicon (arm64), Windows (win64).
@@ -109,9 +110,28 @@ function ffmpegForCodec(codecId) {
   return caps.proresPath;
 }
 
+// Same test ffmpeg uses to read a path as a frame pattern ("clip%d.png" is, "100%.png" isn't).
+function isFramePattern(p) {
+  let found = 0;
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] !== '%') continue;
+    i++;
+    while (p[i] >= '0' && p[i] <= '9') i++;
+    if (p[i] === '%') continue;
+    if (p[i] !== 'd' || found++) return false;
+  }
+  return found === 1;
+}
+
+// Input option that makes ffmpeg read a file named like a frame pattern as that one file.
+// Only for the formats ffmpeg opens through image2 (gif has its own reader, without this option).
+function literalInputArgs(file) {
+  return /\.(png|jpe?g|tiff?|bmp|webp)$/i.test(file) && isFramePattern(file) ? ['-pattern_type', 'none'] : [];
+}
+
 // Probe duration / fps / resolution / codec / audio of a source file via ffmpeg -i.
 function probeMedia(ffPath, file) {
-  const r = spawnSync(ffPath, ['-hide_banner', '-i', file], { encoding: 'utf8', timeout: 20000 });
+  const r = spawnSync(ffPath, ['-hide_banner', ...literalInputArgs(file), '-i', file], { encoding: 'utf8', timeout: 20000 });
   const err = (r.stderr || '') + (r.stdout || '');
   const out = {
     durationSec: null,
@@ -192,6 +212,7 @@ function extractFrame(src, timeSec) {
   const args = [
     '-hide_banner', '-loglevel', 'error',
     ...seek,
+    ...literalInputArgs(src),
     '-i', src,
     '-frames:v', '1',
     '-vf', "scale='min(1600,iw)':-2",
@@ -309,10 +330,13 @@ function buildArgs(project, job, opts, probe) {
   const IW = Math.max(1, Math.round(project.input.width));
   const IH = Math.max(1, Math.round(project.input.height));
   const screen = job.screen || Geometry.screenOf(project) || { width: 1920, height: 1080 };
-  let OW = Math.max(2, Math.round(screen.width));
-  let OH = Math.max(2, Math.round(screen.height));
-  if (OW % 2) OW += 1; // even dimensions for 4:2:x codecs
-  if (OH % 2) OH += 1;
+  // keepGpuSize: a CPU retry after a failed GPU encode must keep the size the file is named after
+  const sizeOpt = { gpu: opts.gpu || opts.keepGpuSize };
+  const refused = Codecs.sizeProblem(opts.codec, screen.width, screen.height, sizeOpt);
+  if (refused && !job.allowPad) throw new Error(`${refused.message}.`);
+  const fit = Codecs.fitOutputSize(opts.codec, screen.width, screen.height, sizeOpt);
+  const OW = fit.width;
+  const OH = fit.height;
 
   const sl = effectiveSlices(project, job.screen ? job.screen.id : undefined);
   if (!sl.length) throw new Error('No enabled slices inside the input canvas' + (job.screen ? ` for screen "${job.screen.name}"` : ''));
@@ -399,25 +423,26 @@ function buildArgs(project, job, opts, probe) {
   // input args
   let inputArgs;
   if (job.isImage && !isStill) {
-    inputArgs = ['-loop', '1', '-t', String(dur), '-i', job.src];
+    inputArgs = ['-loop', '1', '-t', String(dur), ...literalInputArgs(job.src), '-i', job.src];
   } else if (isStill && !isSeq && !job.isImage && job.pngTime > 0) {
     inputArgs = ['-ss', String(job.pngTime), '-i', job.src];
   } else if (!job.isImage && inSec > 0) {
     inputArgs = ['-ss', String(inSec), '-i', job.src];
   } else {
-    inputArgs = ['-i', job.src];
+    inputArgs = [...literalInputArgs(job.src), '-i', job.src];
   }
-  for (const m of maskInputs) inputArgs.push('-i', m);
+  for (const m of maskInputs) inputArgs.push(...literalInputArgs(m), '-i', m);
 
   // GPU (VideoToolbox) applies to moving video; alpha pipeline only via ProRes 4444
   const gpuOk = !!opts.gpu && (!useAlphaPipeline || opts.codec === 'prores_4444');
   const encOpts = { ...opts, gpu: gpuOk };
   const codecArgs = isStill && !isSeq
-    ? ['-frames:v', '1', ...Codecs.encoderArgs(opts.codec, { ...opts, gpu: false })]
+    ? ['-frames:v', '1', '-update', '1', ...Codecs.encoderArgs(opts.codec, { ...opts, gpu: false })] // -update: exact file name, % is not a pattern
     : Codecs.encoderArgs(opts.codec, encOpts);
 
+  // never on a PNG sequence: the image muxer would write the audio packets as fake .png files
   const wantAudio =
-    !isStill && !job.isImage && probe && probe.hasAudio && !useAlphaPipeline;
+    !isStill && !isSeq && !job.isImage && probe && probe.hasAudio && !useAlphaPipeline;
   const audioArgs = wantAudio
     ? codecDef.ext === 'mp4'
       ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '320k']
@@ -426,6 +451,11 @@ function buildArgs(project, job, opts, probe) {
 
   const trimOut = [];
   if (!job.isImage && !isStill && outSec) trimOut.push('-t', String(outSec - inSec));
+
+  // A sequence path is a frame pattern: a literal % in the folder has to be escaped as %%
+  const outTarget = isSeq
+    ? path.join(path.dirname(job.outPath).replace(/%/g, '%%'), path.basename(job.outPath))
+    : job.outPath;
 
   const args = [
     '-y',
@@ -441,7 +471,7 @@ function buildArgs(project, job, opts, probe) {
     ...OUT_META,
     '-progress', 'pipe:1',
     '-nostats',
-    job.outPath,
+    outTarget,
   ];
   const totalDur = isStill && !isSeq
     ? null
@@ -452,7 +482,7 @@ function buildArgs(project, job, opts, probe) {
         : probe && probe.durationSec
           ? probe.durationSec - inSec
           : null;
-  return { args, durationSec: totalDur };
+  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null };
 }
 
 function runFfmpeg(ffPath, args, durationSec, onProgress) {
@@ -486,7 +516,9 @@ function runFfmpeg(ffPath, args, durationSec, onProgress) {
       currentProc = null;
       if (cancelled) return reject(new Error('Cancelled'));
       if (code === 0) return resolve();
-      reject(new Error(`ffmpeg error (code ${code}):\n${stderrTail}`));
+      const err = new Error(`ffmpeg error (code ${code}):\n${stderrTail}`);
+      err.ffmpegArgs = args;
+      reject(err);
     });
   });
 }
@@ -505,12 +537,27 @@ async function startBatch(win, payload) {
   const ffPath = ffmpegForCodec(codec);
   if (!ffPath) throw new Error('No ffmpeg found for this codec');
 
+  // Check every output folder before the first clip, so a missing drive fails at once
+  const destOf = (job) => path.dirname(job.outDir || job.outPath);
+  const folderProblems = new Map();
+  for (const job of jobs) {
+    const dir = destOf(job);
+    if (!folderProblems.has(dir)) folderProblems.set(dir, checkOutputDir(dir));
+  }
+
   const results = [];
   for (let i = 0; i < jobs.length; i++) {
     if (cancelled) break;
     const job = jobs[i];
     const project = job.project || payload.project;
     send(win, { type: 'job-start', index: i, total: jobs.length, file: job.src, label: job.label });
+    const folderProblem = folderProblems.get(destOf(job));
+    if (folderProblem) {
+      results.push({ src: job.src, ok: false, error: folderProblem.message, detail: folderProblem.detail });
+      send(win, { type: 'job-error', index: i, total: jobs.length, error: folderProblem.message, detail: folderProblem.detail, label: job.label });
+      continue;
+    }
+    let paddedTo = null;
     try {
       // PNG sequence: ensure the output folder exists
       if (job.outDir) fs.mkdirSync(job.outDir, { recursive: true });
@@ -518,14 +565,16 @@ async function startBatch(win, payload) {
       const opts = { codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu };
       const onPct = (pct) => send(win, { type: 'progress', index: i, total: jobs.length, percent: pct });
       try {
-        const { args, durationSec } = buildArgs(project, job, opts, probe);
-        await runFfmpeg(ffPath, args, durationSec, onPct);
+        const built = buildArgs(project, job, opts, probe);
+        paddedTo = built.paddedTo;
+        await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
       } catch (gpuErr) {
         // GPU (VideoToolbox) not available on this machine/codec -> retry on CPU
         if (!gpu || cancelled || !Codecs.gpuCapable(codec)) throw gpuErr;
         send(win, { type: 'job-note', index: i, total: jobs.length, note: 'GPU encoder unavailable — falling back to CPU', label: job.label });
-        const { args, durationSec } = buildArgs(project, job, { ...opts, gpu: false }, probe);
-        await runFfmpeg(ffPath, args, durationSec, onPct);
+        const built = buildArgs(project, job, { ...opts, gpu: false, keepGpuSize: true }, probe);
+        paddedTo = built.paddedTo;
+        await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
       }
       // PNG has no container metadata — stamp the tEXt chunk into the file(s)
       if (codec === 'png') {
@@ -538,16 +587,23 @@ async function startBatch(win, payload) {
         } catch (e) { /* best-effort */ }
       }
       const shown = job.outDir || job.outPath;
-      results.push({ src: job.src, out: shown, ok: true });
-      send(win, { type: 'job-done', index: i, total: jobs.length, out: shown, label: job.label });
+      results.push({ src: job.src, out: shown, ok: true, paddedTo });
+      send(win, { type: 'job-done', index: i, total: jobs.length, out: shown, label: job.label, paddedTo });
     } catch (err) {
-      const msg = String((err && err.message) || err);
-      results.push({ src: job.src, ok: false, error: msg });
-      send(win, { type: 'job-error', index: i, total: jobs.length, error: msg, label: job.label });
+      const info = explainError(err, { src: job.src, out: job.outDir || job.outPath });
+      const detail = info.detail == null ? null : [
+        `Source: ${job.src}`,
+        `Output: ${job.outDir || job.outPath}`,
+        '',
+        info.detail,
+        ...(err && err.ffmpegArgs ? ['', `Command: ffmpeg ${err.ffmpegArgs.join(' ')}`] : []),
+      ].join('\n');
+      results.push({ src: job.src, ok: false, error: info.message, detail });
+      send(win, { type: 'job-error', index: i, total: jobs.length, error: info.message, detail, label: job.label });
       if (cancelled) break;
     }
   }
-  send(win, { type: 'batch-done', cancelled, results });
+  send(win, { type: 'batch-done', cancelled, results, total: jobs.length });
   return results;
 }
 
@@ -570,6 +626,7 @@ module.exports = {
   extractWaveform,
   effectiveSlices,
   buildArgs,
+  isFramePattern,
   runFfmpeg,
   startBatch,
   cancel,

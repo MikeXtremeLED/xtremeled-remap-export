@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('xre', {
   writeFileText: (p, t) => ipcRenderer.invoke('file:writeText', p, t),
   writeTempDataUrl: (name, dataUrl) => ipcRenderer.invoke('file:writeTempDataUrl', name, dataUrl),
   writeFileDataUrl: (p, dataUrl) => ipcRenderer.invoke('file:writeDataUrl', p, dataUrl),
+  copyText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   showInFolder: (p) => ipcRenderer.invoke('shell:showInFolder', p),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   previewWaveform: (src) => ipcRenderer.invoke('preview:waveform', src),

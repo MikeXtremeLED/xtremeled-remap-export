@@ -3,6 +3,8 @@
 
 const api = window.xre;
 const $ = (id) => document.getElementById(id);
+const IS_MAC = /Mac/i.test(navigator.platform);
+const FILE_MANAGER = IS_MAC ? 'Finder' : 'Explorer';
 
 // ---------------- state ----------------
 let project = null;
@@ -1528,6 +1530,8 @@ const rp = {
   watching: false,
   watchQueue: [],
   vt: { scale: 0.1, ox: 40, oy: 40 },
+  preflightMode: 'separate', // output mode the size check looks at (set by the last Start)
+  padAcceptedKey: null, // codec + sizes the user agreed to pad (see preflightKey)
 };
 let rpCanvas, rpCtx;
 let frameTimer = null;
@@ -2481,10 +2485,12 @@ function refreshCodecUI() {
   if (def.id === 'prores_4444' && $('r-alpha').value !== 'none') notes.push('Alpha requires footage with an alpha channel.');
   if (def.audioOnly) notes.push('Extracts the audio track as WAV — no video is rendered. Uses the in/out trim.');
   const af = activeFile();
-  if (!def.audioOnly && !def.still && af && af.probe && af.probe.hasAudio) {
+  if (!def.audioOnly && !def.still && !def.sequence && af && af.probe && af.probe.hasAudio) {
     notes.push(`Audio passthrough: ${af.probe.audioLayout || 'source'} (${af.probe.audioChannels || '?'} ch) as PCM${def.ext === 'mp4' ? '/AAC' : ''}.`);
   }
+  if (!def.audioOnly) notes.push(...autoPadNotes());
   $('r-codec-note').textContent = notes.join(' ');
+  renderPreflight();
   // still settings apply when image footage is exported to a video codec
   const anyImage = rp.files.some((f) => f.isImage);
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
@@ -2507,7 +2513,109 @@ async function sameAsSource() {
   if (m.alpha !== 'none' && Codecs.byId($('r-codec').value).alpha.includes(m.alpha)) $('r-alpha').value = m.alpha;
   $('r-bitrate').value = m.bitrateMbps || '';
   refreshCodecUI();
-  $('r-codec-note').textContent = m.note;
+  const padNotes = Codecs.byId($('r-codec').value).audioOnly ? [] : autoPadNotes();
+  $('r-codec-note').textContent = [m.note, ...padNotes].join(' ');
+}
+
+// ---------------- pre-export size check ----------------
+function gpuSizeOpt() {
+  return { gpu: $('r-gpu').checked };
+}
+
+function mergedSize() {
+  return {
+    width: project.screens.reduce((sum, sc) => sum + sc.width, 0),
+    height: Math.max(...project.screens.map((sc) => sc.height)),
+  };
+}
+
+// Canvases one export would write, for an output mode (separate / merged / both)
+function exportSizeTargets(mode) {
+  const m = project.screens.length > 1 ? mode : 'separate';
+  const list = [];
+  if (m !== 'merged') project.screens.forEach((sc) => list.push({ name: sc.name, width: sc.width, height: sc.height }));
+  if (m !== 'separate') list.push({ name: 'Merged', ...mergedSize() });
+  return list;
+}
+
+function sizeProblems(mode) {
+  const def = currentCodec();
+  if (def.audioOnly) return [];
+  return exportSizeTargets(mode)
+    .map((t) => ({ target: t, problem: Codecs.sizeProblem(def.id, t.width, t.height, gpuSizeOpt()) }))
+    .filter((x) => x.problem);
+}
+
+const preflightKey = (problems) => `${currentCodec().id}|${problems.map((x) => `${x.problem.reqW}x${x.problem.reqH}`).join(',')}`;
+
+function preflightBlocked(mode) {
+  const problems = sizeProblems(mode);
+  return problems.length > 0 && rp.padAcceptedKey !== preflightKey(problems);
+}
+
+// Automatic padding (codecs that need even sizes) is listed in the codec notes
+function autoPadNotes() {
+  const def = currentCodec();
+  if (Codecs.sizeRule(def.id, gpuSizeOpt()).strict) return [];
+  const notes = [];
+  for (const t of exportSizeTargets(rp.preflightMode)) {
+    const fit = Codecs.fitOutputSize(def.id, t.width, t.height, gpuSizeOpt());
+    if (fit.padded) notes.push(`${def.label} needs ${fit.rule.modH > 1 ? 'even sizes' : 'an even width'}: ${t.name} is written as ${fit.width}×${fit.height} (black added on the right and bottom), not ${fit.reqW}×${fit.reqH}.`);
+  }
+  return notes;
+}
+
+function renderPreflight() {
+  const box = $('r-preflight');
+  const problems = sizeProblems(rp.preflightMode);
+  box.classList.toggle('hidden', !problems.length);
+  box.classList.remove('flash');
+  if (!problems.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const many = problems.length > 1;
+  const accepted = rp.padAcceptedKey === preflightKey(problems);
+  box.innerHTML = '';
+  const text = document.createElement('div');
+  text.textContent = accepted
+    ? `Black is added on the right and bottom: ${problems.map((x) => `${many ? x.target.name + ' ' : ''}${x.problem.width}×${x.problem.height}`).join(', ')}.`
+    : problems.map((x) => `${x.problem.message}${many ? ` (${x.target.name})` : ''}`).join('; ');
+  box.appendChild(text);
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const addBtn = (label, fn) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = fn;
+    actions.appendChild(b);
+  };
+  if (accepted) {
+    addBtn('Undo', () => {
+      rp.padAcceptedKey = null;
+      renderPreflight();
+    });
+  } else {
+    addBtn(many ? 'Pad to next multiple of 4' : `Pad to ${problems[0].problem.width}×${problems[0].problem.height}`, () => {
+      rp.padAcceptedKey = preflightKey(sizeProblems(rp.preflightMode));
+      renderPreflight();
+    });
+    addBtn('Other codec', () => {
+      const sel = $('r-codec');
+      sel.scrollIntoView({ block: 'center' });
+      sel.focus();
+      try { sel.showPicker(); } catch (e) { /* focus is enough */ }
+    });
+  }
+  box.appendChild(actions);
+}
+
+function flashPreflight() {
+  const box = $('r-preflight');
+  box.classList.remove('flash');
+  void box.offsetWidth; // restart the animation
+  box.classList.add('flash');
+  box.scrollIntoView({ block: 'nearest' });
 }
 
 // ---------------- rasterized polygon masks ----------------
@@ -2593,16 +2701,11 @@ async function startRender(filesOverride, optsOverride) {
         label: `${baseName(f.path)} → WAV`,
       });
     }
-    rp.running = true;
-    updateStartButton();
-    $('rp-add').disabled = true;
-    $('r-progress').style.display = '';
-    $('r-log').innerHTML = '';
-    $('r-bar').style.width = '0%';
+    beginExportUI();
     try {
       await api.renderStart({ project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices }, jobs: wavJobs, codec: codecId, depth, fps, imageDuration });
     } catch (err) {
-      $('r-log').innerHTML += `<div class="err">✗ ${String(err.message || err).split('\n')[0]}</div>`;
+      failExportUI(err, wavJobs.length);
     }
     rp.running = false;
     updateStartButton();
@@ -2616,6 +2719,19 @@ async function startRender(filesOverride, optsOverride) {
   if (project.screens.length > 1) {
     outMode = (optsOverride && optsOverride.mode) || (await askOutputMode());
     if (!outMode) return;
+  }
+
+  // HAP family refuses sizes that aren't multiples of 4: don't start until that is decided
+  rp.preflightMode = outMode;
+  refreshCodecUI(); // the notes and notice follow the output mode just chosen
+  if (preflightBlocked(outMode)) {
+    flashPreflight();
+    if (filesOverride) {
+      for (const f of filesOverride) {
+        addErrorRow(baseName(f.path), `${sizeProblems(outMode)[0].problem.message}. Auto export skipped this file.`, null);
+      }
+    }
+    return;
   }
 
   const targets = []; // {proj, screen, suffix}
@@ -2638,10 +2754,9 @@ async function startRender(filesOverride, optsOverride) {
     const projForJob = tgt.proj || null;
     const projUsed = projForJob || project;
     const maskFiles = await buildMaskFiles(projUsed, tgt.screen.id);
-    let OW = Math.round(tgt.screen.width);
-    let OH = Math.round(tgt.screen.height);
-    if (OW % 2) OW += 1;
-    if (OH % 2) OH += 1;
+    const fit = Codecs.fitOutputSize(codecId, tgt.screen.width, tgt.screen.height, { gpu });
+    const OW = fit.width;
+    const OH = fit.height;
     for (const f of files) {
       const pp = await api.pathParse(f.path);
       const dest = rp.destDir || pp.dir;
@@ -2663,6 +2778,7 @@ async function startRender(filesOverride, optsOverride) {
         outSec: f.outSec,
         pngTime: def.still && !def.sequence && !f.isImage ? f.frameTime || f.inSec || 0 : 0,
         screen: { id: tgt.screen.id, name: tgt.screen.name, width: tgt.screen.width, height: tgt.screen.height },
+        allowPad: fit.rule.strict && rp.padAcceptedKey != null,
         maskFiles,
         project: projForJob || undefined,
         label: targets.length > 1 || project.screens.length > 1 ? `${baseName(f.path)} → ${tgt.screen.name}` : baseName(f.path),
@@ -2670,12 +2786,7 @@ async function startRender(filesOverride, optsOverride) {
     }
   }
 
-  rp.running = true;
-  updateStartButton();
-  $('rp-add').disabled = true;
-  $('r-progress').style.display = '';
-  $('r-log').innerHTML = '';
-  $('r-bar').style.width = '0%';
+  beginExportUI();
 
   const payload = {
     project: {
@@ -2696,12 +2807,70 @@ async function startRender(filesOverride, optsOverride) {
   try {
     await api.renderStart(payload);
   } catch (err) {
-    $('r-log').innerHTML += `<div class="err">✗ ${String(err.message || err).split('\n')[0]}</div>`;
+    failExportUI(err, jobs.length);
   }
   rp.running = false;
   updateStartButton();
   $('rp-add').disabled = false;
   processWatchQueue();
+}
+
+function beginExportUI() {
+  rp.running = true;
+  updateStartButton();
+  $('rp-add').disabled = true;
+  $('r-progress').style.display = '';
+  $('r-cancel').style.display = '';
+  $('r-log').innerHTML = '';
+  $('r-bar').className = '';
+  $('r-bar').style.width = '0%';
+  $('r-plabel').className = '';
+}
+
+// End state of the bar: the real outcome, and no Cancel any more
+function showBatchOutcome(okCount, total, cancelled) {
+  const o = Codecs.batchOutcome(okCount, total, cancelled);
+  const bar = $('r-bar'), plabel = $('r-plabel');
+  bar.className = `state-${o.state}`;
+  if (!cancelled) bar.style.width = '100%';
+  plabel.className = `state-${o.state}`;
+  plabel.textContent = o.text;
+  $('r-ppct').textContent = '';
+  $('r-cancel').style.display = 'none';
+}
+
+// A failed batch that never reached a batch-done event (for example no ffmpeg found)
+function failExportUI(err, total) {
+  const full = String((err && err.message) || err);
+  addErrorRow('', full.split('\n')[0].replace(/^Error invoking remote method '[^']*': (Error: )?/, ''), full);
+  showBatchOutcome(0, total, false);
+}
+
+function addErrorRow(label, message, detail) {
+  const log = $('r-log');
+  const div = document.createElement('div');
+  div.className = 'err log-row';
+  const x = document.createElement('span');
+  x.className = 'x';
+  x.textContent = '✗';
+  const msg = document.createElement('span');
+  msg.className = 'msg';
+  msg.textContent = `${label ? label + ': ' : ''}${message} `;
+  div.append(x, msg);
+  if (detail) {
+    const a = document.createElement('a');
+    a.href = '#';
+    a.textContent = 'Copy details';
+    a.onclick = (e) => {
+      e.preventDefault();
+      api.copyText(detail);
+      a.textContent = 'Copied';
+      setTimeout(() => { a.textContent = 'Copy details'; }, 1500);
+    };
+    msg.appendChild(a);
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
 }
 
 function onRenderEvent(ev) {
@@ -2724,23 +2893,19 @@ function onRenderEvent(ev) {
     bar.style.width = `${(ev.index + 1) * jobPart}%`;
     const div = document.createElement('div');
     div.className = 'ok';
-    div.textContent = `✓ ${ev.label || baseName(ev.out)} `;
+    div.textContent = `✓ ${ev.label || baseName(ev.out)}${ev.paddedTo ? ` (padded to ${ev.paddedTo})` : ''} `;
     const a = document.createElement('a');
     a.href = '#';
-    a.textContent = 'show in Finder';
+    a.textContent = `show in ${FILE_MANAGER}`;
     a.onclick = (e) => { e.preventDefault(); api.showInFolder(ev.out); };
     div.appendChild(a);
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
   } else if (ev.type === 'job-error') {
-    const div = document.createElement('div');
-    div.className = 'err';
-    div.textContent = `✗ ${ev.label ? ev.label + ': ' : ''}${String(ev.error).split('\n')[0]}`;
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
+    addErrorRow(ev.label || '', String(ev.error), ev.detail);
   } else if (ev.type === 'batch-done') {
-    plabel.textContent = ev.cancelled ? 'Cancelled' : 'Done';
-    if (!ev.cancelled) { bar.style.width = '100%'; ppct.textContent = '100%'; }
+    const results = ev.results || [];
+    showBatchOutcome(results.filter((r) => r.ok).length, ev.total || results.length, ev.cancelled);
   }
 }
 
@@ -3489,7 +3654,10 @@ function bindUI() {
   $('r-alpha').onchange = refreshCodecUI;
   $('r-same-as-source').onclick = sameAsSource;
   $('r-gpu').checked = localStorage.getItem('xre:gpu') === '1';
-  $('r-gpu').onchange = () => localStorage.setItem('xre:gpu', $('r-gpu').checked ? '1' : '0');
+  $('r-gpu').onchange = () => {
+    localStorage.setItem('xre:gpu', $('r-gpu').checked ? '1' : '0');
+    refreshCodecUI();
+  };
   $('r-dest-btn').onclick = async () => {
     const dir = await api.openDirDialog({ title: 'Choose output folder' });
     if (dir) {
