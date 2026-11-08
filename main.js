@@ -493,6 +493,7 @@ ipcMain.handle('path:join', (e, ...parts) => path.join(...parts));
 ipcMain.handle('path:toFileUrl', (e, p) => require('url').pathToFileURL(p).href);
 
 ipcMain.handle('ffmpeg:caps', () => renderMod.getCapabilities());
+ipcMain.handle('ffmpeg:gpu', () => renderMod.detectGpu());
 ipcMain.handle('render:start', async (e, payload) => {
   const sleepBlock = powerSaveBlocker.start('prevent-app-suspension');
   try {

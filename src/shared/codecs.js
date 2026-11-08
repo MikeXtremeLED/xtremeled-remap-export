@@ -74,9 +74,79 @@
     return ['prores_proxy', 'prores_lt', 'prores_422', 'prores_hq', 'prores_4444', 'hevc', 'h264'].includes(codecId);
   }
 
-  // ffmpeg encoder args for a codec + options {alpha, depth, bitrateMbps, fps, gpu}
+  // ---- hardware (graphics card) encoders ----
+
+  const GPU_FAMILIES = {
+    videotoolbox: { label: 'VideoToolbox' },
+    qsv: { label: 'Intel Quick Sync' },
+    nvenc: { label: 'NVIDIA NVENC' },
+    amf: { label: 'AMD AMF' },
+  };
+  const isProres422 = (id) => ['prores_proxy', 'prores_lt', 'prores_422', 'prores_hq'].includes(id);
+  const gpuProbeKey = (id) => (id === 'h264' || id === 'hevc' ? id : isProres422(id) || id === 'prores_4444' ? 'prores' : null);
+
+  // Which encoder families are worth a test on this platform, best-tested first
+  function gpuFamilies(platform) {
+    if (platform === 'darwin') return ['videotoolbox'];
+    if (platform === 'win32') return ['qsv', 'nvenc', 'amf'];
+    return [];
+  }
+
+  // ffmpeg's name for a hardware encoder ('prores' only exists on VideoToolbox)
+  function gpuEncoderName(key, family) {
+    if (key === 'prores' && family !== 'videotoolbox') return null;
+    return `${key}_${family}`;
+  }
+
+  // The encoder that passed its test for this export, or null when it stays on the processor
+  function gpuFor(detected, codecId, depth) {
+    const key = gpuProbeKey(codecId);
+    const enc = key && detected && detected.encoders ? detected.encoders[key] : null;
+    if (!enc) return null;
+    if (key === 'hevc' && !(enc.depths || [8]).includes(depth || 8)) return null;
+    return enc;
+  }
+
+  // Only the encoder itself may send an export back to the processor: a full disk or a
+  // damaged source would fail there too, and cost the same time twice.
+  function isGpuFailure(message, encoderId) {
+    if (!encoderId) return false;
+    const t = String(message || '');
+    if (/No space left|Disk quota|Permission denied|No such file|Input\/output error|Invalid data found/i.test(t)) return false;
+    const name = encoderId.replace(/[^a-z0-9_]/gi, '');
+    const trouble = '(error|fail|cannot|unable|invalid|not supported|unsupported)';
+    return (
+      new RegExp(`\\[[^\\]\\n]*${name}[^\\]\\n]*\\][^\\n]*${trouble}`, 'i').test(t) ||
+      new RegExp(`(nvenc|nvEnc|\\bMFX\\b|mfx_|\\bAMF\\b|amf_|VTCompression|d3d11|Direct3D)[^\\n]*${trouble}|${trouble}[^\\n]*(nvenc|\\bMFX\\b|\\bAMF\\b|VTCompression)`, 'i').test(t) ||
+      /Error while opening encoder|Could not open encoder|Error initializing output stream|Error (submitting|sending)[^\n]*encoder|Video encoding failed|Unknown encoder|Encoder \S+ not found/i.test(t)
+    );
+  }
+
+  // Quick Sync / NVENC / AMF arguments. Every one of these is proven on this machine by the
+  // start-up test before it can be used, so a driver that refuses an option never reaches a job.
+  function hardwareArgs(codecId, family, opt) {
+    const ten = codecId === 'hevc' && (opt.depth || 8) >= 10;
+    const args = ['-c:v', opt.gpuEncoder || `${codecId}_${family}`, '-pix_fmt', ten ? 'p010le' : 'nv12'];
+    if (ten) args.push('-profile:v', 'main10');
+    const peak = opt.bitrateMbps
+      ? ['-b:v', `${opt.bitrateMbps}M`, '-maxrate', `${Math.ceil(opt.bitrateMbps * 1.4)}M`, '-bufsize', `${Math.ceil(opt.bitrateMbps * 2)}M`]
+      : [];
+    if (family === 'qsv') args.push(...(opt.bitrateMbps ? peak : ['-global_quality', '20']));
+    else if (family === 'nvenc') args.push('-rc', 'vbr', ...(opt.bitrateMbps ? peak : ['-cq', '20', '-b:v', '0']));
+    else if (family === 'amf') args.push(...(opt.bitrateMbps ? ['-rc', 'vbr_peak', ...peak] : ['-rc', 'cqp', '-qp_i', '20', '-qp_p', '20']));
+    if (codecId === 'hevc') args.push('-tag:v', 'hvc1');
+    return [...args, ...BT709_TAGS];
+  }
+
+  // Faster ProRes encoder for the 422 profiles. Bigger files; off unless the user asks for it.
+  const fastProresCapable = (codecId) => isProres422(codecId);
+
+  // ffmpeg encoder args for a codec + options {alpha, depth, bitrateMbps, fps, gpu, gpuFamily, gpuEncoder, fastProres}
   function encoderArgs(codecId, opt) {
     const alpha = opt.alpha || 'none';
+    if (opt.gpu && opt.gpuFamily && opt.gpuFamily !== 'videotoolbox' && (codecId === 'h264' || codecId === 'hevc')) {
+      return hardwareArgs(codecId, opt.gpuFamily, opt);
+    }
     if (opt.gpu && gpuCapable(codecId)) {
       switch (codecId) {
         case 'prores_proxy':
@@ -105,7 +175,7 @@
       case 'prores_422':
       case 'prores_hq': {
         const profile = { prores_proxy: '0', prores_lt: '1', prores_422: '2', prores_hq: '3' }[codecId];
-        return ['-c:v', 'prores_ks', '-profile:v', profile, '-vendor', 'apl0', '-pix_fmt', 'yuv422p10le', ...BT709_TAGS];
+        return ['-c:v', opt.fastProres ? 'prores_aw' : 'prores_ks', '-profile:v', profile, '-vendor', 'apl0', '-pix_fmt', 'yuv422p10le', ...BT709_TAGS];
       }
       case 'prores_4444':
         return ['-c:v', 'prores_ks', '-profile:v', '4', '-vendor', 'apl0',
@@ -333,6 +403,41 @@
     };
   }
 
+  // How the slices get onto the canvas: all at once with xstack, which costs the same however
+  // many slices there are, or one by one with overlay. Overlay stays for everything xstack
+  // cannot do: it needs two or more slices, and has no way to blend, overlap or clip.
+  // slices: Geometry.effectiveSlices entries; plan: pixelPlan result; options: {alpha}
+  function compositePlan(slices, width, height, plan, options) {
+    const o = options || {};
+    const overlay = (reason) => ({ mode: 'overlay', reason });
+    if (slices.length < 2) return overlay('single slice');
+    if (o.alpha) return overlay('alpha export');
+    if (!plan.source) return overlay('source format unknown');
+    if (plan.source.alpha) return overlay('source has alpha');
+    if (slices.some((s) => s.polyMask)) return overlay('polygon mask');
+    if (slices.some((s) => s.place.x < 0 || s.place.y < 0 || s.place.x + s.place.w > width || s.place.y + s.place.h > height)) {
+      return overlay('slice past the output edge');
+    }
+    const byX = slices.map((s) => s.place).sort((a, b) => a.x - b.x);
+    for (let i = 0; i < byX.length; i++) {
+      const a = byX[i];
+      for (let j = i + 1; j < byX.length && byX[j].x < a.x + a.w; j++) {
+        const b = byX[j];
+        if (b.y < a.y + a.h && a.y < b.y + b.h) return overlay('overlapping slices');
+      }
+    }
+    // pad rounds down to whole chroma samples: on 4:2:0 or 4:2:2 it would cut the last line
+    // or column off a canvas that does not end on an even pixel
+    const reachW = Math.max(...slices.map((s) => s.place.x + s.place.w));
+    const reachH = Math.max(...slices.map((s) => s.place.y + s.place.h));
+    if (reachW !== width || reachH !== height) {
+      const oddX = plan.work.hsub && (reachW % 2 !== 0 || width % 2 !== 0);
+      const oddY = plan.work.vsub && (reachH % 2 !== 0 || height % 2 !== 0);
+      if (oddX || oddY) return overlay('odd canvas edge');
+    }
+    return { mode: 'xstack', reason: null };
+  }
+
   // The rows of the Pixel check card. Each row: {key, value, ok}. ok is false when something
   // is limited or unknown, so the card never shows a green check for it.
   function pixelCheckRows(plan, codecId, fps, isImage) {
@@ -382,5 +487,5 @@
     return { state: 'partial', text: `${okCount} of ${total} exported, ${failed} failed` };
   }
 
-  return { CODECS, byId, matchSource, encoderArgs, gpuCapable, writesBt709, sizeRule, fitOutputSize, sizeProblem, parsePixFmt, exactRate, pixelPlan, pixelCheckRows, codecFidelityNote, batchOutcome };
+  return { CODECS, byId, matchSource, encoderArgs, gpuCapable, GPU_FAMILIES, gpuFamilies, gpuEncoderName, gpuFor, isGpuFailure, fastProresCapable, writesBt709, sizeRule, fitOutputSize, sizeProblem, parsePixFmt, exactRate, pixelPlan, compositePlan, pixelCheckRows, codecFidelityNote, batchOutcome };
 });

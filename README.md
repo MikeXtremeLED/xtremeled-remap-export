@@ -94,7 +94,7 @@ waveform, live input/output preview, test pattern generator and a full codec mat
 - **Test pattern generator** — verify your mapping on the real LED wall with slice names, grid
   and circles; use as reference, save as PNG or render to any codec.
 - **Watch folder** — drop renders in a folder and they're remapped automatically.
-- **GPU acceleration** (VideoToolbox on macOS) with automatic CPU fallback.
+- **Graphics card encoding** (VideoToolbox on macOS, Intel Quick Sync, NVIDIA NVENC or AMD AMF on Windows when they pass a short test encode), back to the processor when the encoder fails.
 - Native **ffmpeg** bundled for Intel Mac, Apple Silicon and Windows — no installation needed.
 
 ## Working with other media servers

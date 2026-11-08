@@ -300,6 +300,11 @@
             <label>Codec</label>
             <select id="r-codec" style="flex:1"></select>
           </div>
+          <div class="row check-row" id="r-fast-row">
+            <label for="r-fast-prores">Fast ProRes (larger files)</label>
+            <input type="checkbox" id="r-fast-prores" />
+            <span class="hint-tag" id="r-fast-hint">ProRes only</span>
+          </div>
           <div class="row">
             <label>Alpha</label>
             <select id="r-alpha">
@@ -325,11 +330,12 @@
           <div class="row">
             <button id="r-same-as-source" title="Match codec, bit depth and bitrate of the selected footage">Remap same as source</button>
           </div>
-          <div class="row">
-            <label style="min-width:auto">GPU acceleration (VideoToolbox)</label>
-            <input type="checkbox" id="r-gpu" />
+          <div class="row check-row" id="r-gpu-row">
+            <label for="r-gpu" id="r-gpu-label">Graphics card: checking…</label>
+            <input type="checkbox" id="r-gpu" disabled />
+            <span class="tag-ok" id="r-gpu-tag" hidden>tested</span>
           </div>
-          <div class="note">Uses the Mac's hardware encoder for ProRes / HEVC / H.264. Falls back to CPU automatically when unavailable.</div>
+          <div class="note" id="r-gpu-note"></div>
           <div id="r-codec-note" class="note"></div>
           <div id="r-still-row">
             <div class="subtitle">Image footage → video</div>

@@ -84,6 +84,7 @@ function getCapabilities(force) {
         hasHap: /\shap\s/.test(encs),
         hasX265: /libx265/.test(encs),
         hasProres: /prores_ks/.test(encs),
+        hasProresAw: /prores_aw/.test(encs),
       });
     } catch (e) {
       /* skip */
@@ -102,6 +103,7 @@ function getCapabilities(force) {
     hasDxv: !!dxv,
     hasHap: !!hap,
     hasX265: !!x265,
+    fastProres: !!(prores && prores.hasProresAw),
   };
   return capsCache;
 }
@@ -112,6 +114,80 @@ function ffmpegForCodec(codecId) {
   if (codecId === 'hap' || codecId === 'hap_q' || codecId === 'dxv_hq') return caps.hapPath;
   if (codecId === 'hevc') return caps.x265Path;
   return caps.proresPath;
+}
+
+// A hardware encoder counts only after a short real encode on this machine. Being listed by
+// ffmpeg proves nothing: the encoders for NVIDIA and AMD are listed on every Windows PC.
+function probeEncoder(ffPath, codecId, opts) {
+  return new Promise((resolve) => {
+    let proc;
+    let done = false;
+    const finish = (passed) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(passed);
+    };
+    const timer = setTimeout(() => {
+      try { proc && proc.kill('SIGKILL'); } catch (e) { /* already stopped */ }
+      finish(false);
+    }, 20000);
+    try {
+      proc = spawn(ffPath, [
+        '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=25',
+        '-frames:v', '8', '-an',
+        ...Codecs.encoderArgs(codecId, { ...opts, gpu: true }),
+        '-f', 'null', '-',
+      ], { stdio: 'ignore' });
+    } catch (e) {
+      finish(false);
+      return;
+    }
+    proc.on('error', () => finish(false));
+    proc.on('close', (code) => finish(code === 0));
+  });
+}
+
+let gpuDetection = null;
+
+// Tests the graphics card encoders once per run of the app; ffmpeg runs in the background.
+// Stops at the first family that works, because each test takes a few seconds on a slow PC.
+function detectGpu(force) {
+  if (gpuDetection && !force) return gpuDetection;
+  gpuDetection = (async () => {
+    const encoders = {};
+    const families = Codecs.gpuFamilies(process.platform);
+    const tryKey = async (key, probeCodec) => {
+      const ffPath = ffmpegForCodec(probeCodec);
+      if (!ffPath) return null;
+      for (const family of families) {
+        const id = Codecs.gpuEncoderName(key, family);
+        if (!id) continue;
+        if (await probeEncoder(ffPath, probeCodec, { gpuFamily: family, gpuEncoder: id, depth: 8 })) {
+          const entry = { id, family, label: Codecs.GPU_FAMILIES[family].label };
+          if (key === 'hevc') {
+            entry.depths = [8];
+            if (await probeEncoder(ffPath, probeCodec, { gpuFamily: family, gpuEncoder: id, depth: 10 })) entry.depths.push(10);
+          }
+          return entry;
+        }
+      }
+      return null;
+    };
+    for (const [key, probeCodec] of [['h264', 'h264'], ['hevc', 'hevc'], ['prores', 'prores_hq']]) {
+      const found = await tryKey(key, probeCodec);
+      if (found) encoders[key] = found;
+    }
+    const first = encoders.h264 || encoders.hevc || encoders.prores || null;
+    return { encoders, label: first ? first.label : null, family: first ? first.family : null };
+  })();
+  return gpuDetection;
+}
+
+// Tests only: pretend a detection result, or null to run the real test again
+function setGpuDetection(result) {
+  gpuDetection = result ? Promise.resolve(result) : null;
 }
 
 // Same test ffmpeg uses to read a path as a frame pattern ("clip%d.png" is, "100%.png" isn't).
@@ -379,6 +455,10 @@ function buildArgs(project, job, opts, probe) {
   const fpsRate = Codecs.exactRate(fps);
   const baseFmt = `,format=${plan.basePix}`;
   const overlayFmt = `:format=${plan.overlay}`;
+  const composite = opts.compositor === 'overlay'
+    ? { mode: 'overlay', reason: 'requested' }
+    : Codecs.compositePlan(sl, OW, OH, plan, { alpha: useAlphaPipeline });
+  const stacked = composite.mode === 'xstack';
   const parts = [];
 
   // Stills grab frame #1, and a trim starts at the frame after the in-point: after an input
@@ -433,6 +513,8 @@ function buildArgs(project, job, opts, probe) {
       `crop=${s.crop.w}:${s.crop.h}:${s.crop.x}:${s.crop.y}:exact=1`,
       ...contentOps(s.rot, s.flip),
       ...(sameSize ? [] : [`scale=${s.place.w}:${s.place.h}:flags=bicubic`]),
+      // xstack needs every input in one format and SAR, or ffmpeg picks a compromise itself
+      ...(stacked ? [`format=${plan.work.pix}`, 'setsar=1'] : []),
     ];
     if (maskFile) {
       const mIdx = 1 + maskInputs.length;
@@ -445,16 +527,28 @@ function buildArgs(project, job, opts, probe) {
     }
   });
 
-  parts.push(`color=c=${baseColor}:s=${OW}x${OH}:r=${fpsRate}${baseFmt}[base]`);
-  let prev = 'base';
-  sl.forEach((s, i) => {
-    const last = i === sl.length - 1;
-    const outLabel = last ? (alpha === 'only' ? 'pre' : 'out') : `o${i}`;
-    const shortest = i === 0 ? ':shortest=1' : '';
-    parts.push(`[${prev}][c${i}]overlay=${s.place.x}:${s.place.y}${shortest}${overlayFmt}[${outLabel}]`);
-    prev = outLabel;
-  });
-  if (alpha === 'only') parts.push('[pre]alphaextract[out]');
+  if (stacked) {
+    // All slices in one pass, so the cost no longer grows with every slice. xstack only makes
+    // a canvas as big as the slices reach, pad fills the rest; fps gives what the color base
+    // of the overlay path gives: a steady frame rate, also from a variable-rate source.
+    const reachW = Math.max(...sl.map((s) => s.place.x + s.place.w));
+    const reachH = Math.max(...sl.map((s) => s.place.y + s.place.h));
+    const chain = [`xstack=inputs=${sl.length}:layout=${sl.map((s) => `${s.place.x}_${s.place.y}`).join('|')}:fill=black:shortest=1`];
+    if (reachW !== OW || reachH !== OH) chain.push(`pad=${OW}:${OH}:0:0:black`);
+    if (!isStill || isSeq) chain.push(`fps=${fpsRate}`);
+    parts.push(`${sl.map((_, i) => `[c${i}]`).join('')}${chain.join(',')}[out]`);
+  } else {
+    parts.push(`color=c=${baseColor}:s=${OW}x${OH}:r=${fpsRate}${baseFmt}[base]`);
+    let prev = 'base';
+    sl.forEach((s, i) => {
+      const last = i === sl.length - 1;
+      const outLabel = last ? (alpha === 'only' ? 'pre' : 'out') : `o${i}`;
+      const shortest = i === 0 ? ':shortest=1' : '';
+      parts.push(`[${prev}][c${i}]overlay=${s.place.x}:${s.place.y}${shortest}${overlayFmt}[${outLabel}]`);
+      prev = outLabel;
+    });
+    if (alpha === 'only') parts.push('[pre]alphaextract[out]');
+  }
 
   // input args
   let inputArgs;
@@ -530,7 +624,7 @@ function buildArgs(project, job, opts, probe) {
     frames: expectSec != null && fpsKnown ? Math.round(expectSec * fps) : null,
     hasAudio: !!(probe && probe.hasAudio),
   };
-  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null, expect };
+  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null, expect, composite };
 }
 
 function runFfmpeg(ffPath, args, durationSec, onProgress) {
@@ -659,6 +753,10 @@ async function runBatch(win, payload) {
   const ffPath = ffmpegForCodec(codec);
   if (!ffPath) throw new Error('No ffmpeg found for this codec');
 
+  // Only an encoder that passed its test on this machine; otherwise the processor does it.
+  const gpuChoice = gpu ? Codecs.gpuFor(await detectGpu(), codec, depth) : null;
+  const fastProres = !!payload.fastProres && !gpuChoice && Codecs.fastProresCapable(codec) && getCapabilities().fastProres;
+
   // Check every output folder before the first clip, so a missing drive fails at once
   const destOf = (job) => path.dirname(job.outDir || job.outPath);
   const folderProblems = new Map();
@@ -697,7 +795,12 @@ async function runBatch(win, payload) {
         ? { ...job, outDir: partial, outPath: path.join(partial, path.basename(job.outPath)) }
         : { ...job, outPath: partial };
       const probe = probeMedia(ffPath, job.src);
-      const opts = { codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu };
+      const opts = {
+        codec, alpha, depth, bitrateMbps, fps, imageDuration, fastProres,
+        gpu: !!gpuChoice,
+        gpuFamily: gpuChoice ? gpuChoice.family : null,
+        gpuEncoder: gpuChoice ? gpuChoice.id : null,
+      };
       const onPct = (pct) => send(win, { type: 'progress', index: i, total: jobs.length, percent: pct });
       let expect;
       try {
@@ -706,10 +809,10 @@ async function runBatch(win, payload) {
         expect = built.expect;
         await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
       } catch (gpuErr) {
-        // GPU (VideoToolbox) not available on this machine/codec -> retry on CPU
-        if (!gpu || cancelled || !Codecs.gpuCapable(codec)) throw gpuErr;
-        send(win, { type: 'job-note', index: i, total: jobs.length, note: 'GPU encoder unavailable — falling back to CPU', label: job.label });
-        const built = buildArgs(project, workJob, { ...opts, gpu: false, keepGpuSize: true }, probe);
+        // Back to the processor only when the graphics card encoder itself failed
+        if (!gpuChoice || cancelled || !Codecs.isGpuFailure(gpuErr && gpuErr.message, gpuChoice.id)) throw gpuErr;
+        send(win, { type: 'job-note', index: i, total: jobs.length, note: `${gpuChoice.label} failed on this clip, finishing on the processor.`, label: job.label });
+        const built = buildArgs(project, workJob, { ...opts, gpu: false, gpuFamily: null, gpuEncoder: null, keepGpuSize: true }, probe);
         paddedTo = built.paddedTo;
         expect = built.expect;
         await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
@@ -772,6 +875,8 @@ function cancel() {
 
 module.exports = {
   getCapabilities,
+  detectGpu,
+  setGpuDetection,
   ffmpegForCodec,
   probeMedia,
   extractFrame,

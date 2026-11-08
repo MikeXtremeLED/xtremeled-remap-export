@@ -277,6 +277,14 @@ button.chk-chip.bad:hover { background: rgba(224, 85, 85, 0.28); }
   pointer-events: none;
 }
 .section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.row.check-row { justify-content: flex-start; gap: 6px; }
+.row.check-row label { min-width: auto; white-space: nowrap; }
+.row.check-row input[type='checkbox'] { margin: 0; flex-shrink: 0; }
+.row.check-row.off label { opacity: 0.55; }
+.row.check-row.off input { opacity: 0.45; }
+.tag-ok, .hint-tag { border-radius: 3px; padding: 0 6px; font-size: 10px; line-height: 16px; flex-shrink: 0; }
+.tag-ok { background: rgba(76, 175, 80, 0.16); color: #7fcf83; }
+.hint-tag { margin-left: auto; color: var(--dim); background: var(--panel2); }
 .panel-title {
   font-size: 11px;
   font-weight: 700;

@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('xre', {
   pathJoin: (...parts) => ipcRenderer.invoke('path:join', ...parts),
   pathToFileUrl: (p) => ipcRenderer.invoke('path:toFileUrl', p),
   ffmpegCaps: () => ipcRenderer.invoke('ffmpeg:caps'),
+  ffmpegGpu: () => ipcRenderer.invoke('ffmpeg:gpu'),
   previewProbe: (src) => ipcRenderer.invoke('preview:probe', src),
   previewFrame: (src, timeSec) => ipcRenderer.invoke('preview:frame', src, timeSec),
   renderStart: (payload) => ipcRenderer.invoke('render:start', payload),

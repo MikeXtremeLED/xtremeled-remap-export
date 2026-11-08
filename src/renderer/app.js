@@ -14,6 +14,7 @@ let selId = null; // selected slice id
 let selScreenId = null; // selected screen id (tree selection when no slice selected)
 let activeScreenId = null;
 let caps = null;
+let gpuEncoders = null; // null until the background test has finished
 let maskEdit = false;
 // Keep aspect ratio while scaling a slice in the Output view (toolbar lock or Shift).
 let outLock = localStorage.getItem('xre:outlock') === '1';
@@ -2862,8 +2863,9 @@ function refreshCodecUI() {
   if (depthSel.selectedOptions[0] && depthSel.selectedOptions[0].disabled) depthSel.value = String(def.depths[0]);
   depthSel.disabled = def.depths.length <= 1;
   $('r-bitrate-row').style.display = def.bitrate ? '' : 'none';
-  $('r-gpu').disabled = !Codecs.gpuCapable(def.id);
+  refreshEncoderOptions(def);
   const notes = [];
+  if (fastProresActive()) notes.push('Fast ProRes is not tested in every player yet: try a clip in Resolume and your player before the show.');
   if (def.unsupported) notes.push(def.unsupported);
   if (def.note) notes.push(def.note);
   if (def.id === 'dxv') notes.push('DXT1 — plays natively in Resolume.');
@@ -2883,6 +2885,59 @@ function refreshCodecUI() {
   const anyImage = rp.files.some((f) => f.isImage);
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
   updateStartButton();
+}
+
+function gpuActive() {
+  return !$('r-gpu').disabled && $('r-gpu').checked;
+}
+
+function fastProresActive() {
+  return !$('r-fast-prores').disabled && $('r-fast-prores').checked;
+}
+
+// The graphics card row and the Fast ProRes row follow the chosen codec and what was
+// really tested on this machine; a hardware encoder that did not pass is never offered.
+function refreshEncoderOptions(def) {
+  const depth = parseInt($('r-depth').value, 10);
+  const box = $('r-gpu');
+  const label = $('r-gpu-label');
+  const note = $('r-gpu-note');
+  const tag = $('r-gpu-tag');
+  const found = gpuEncoders && gpuEncoders.label;
+  const enc = gpuEncoders ? Codecs.gpuFor(gpuEncoders, def.id, depth) : null;
+  box.disabled = !enc;
+  tag.hidden = !enc;
+  $('r-gpu-row').classList.toggle('off', !enc);
+  if (!gpuEncoders) {
+    label.textContent = 'Graphics card: checking…';
+    note.textContent = '';
+  } else if (!found) {
+    label.textContent = 'Graphics card: none found';
+    note.textContent = 'No graphics encoder passed the test export on this computer, so the processor does the work.';
+  } else {
+    label.textContent = `Graphics card: ${enc ? enc.label : found}`;
+    if (enc) {
+      note.textContent = {
+        qsv: 'Up to 4x faster for H.264 and HEVC',
+        nvenc: 'Faster for H.264 and HEVC',
+        amf: 'Faster for H.264 and HEVC',
+        videotoolbox: "Uses the Mac's hardware encoder for ProRes, HEVC and H.264",
+      }[enc.family];
+      if (def.id === 'h264' && enc.family === 'qsv') note.textContent += '. A little softer than the processor on H.264, so the choice is yours.';
+    } else if (def.id === 'hevc') {
+      note.textContent = `HEVC ${depth}-bit stays on the processor on this computer.`;
+    } else {
+      note.textContent = `${found} works with ${gpuEncoders.family === 'videotoolbox' ? 'ProRes, HEVC and H.264' : 'H.264 and HEVC'}; this codec stays on the processor.`;
+    }
+  }
+  const fast = $('r-fast-prores');
+  const fastOk = Codecs.fastProresCapable(def.id) && !!(caps && caps.fastProres) && !(enc && gpuActive());
+  fast.disabled = !fastOk;
+  $('r-fast-row').classList.toggle('off', !fastOk);
+  $('r-fast-hint').hidden = fastOk;
+  $('r-fast-hint').textContent = !Codecs.fastProresCapable(def.id)
+    ? (def.group === 'ProRes' ? 'Not for 4444' : 'ProRes only')
+    : enc && gpuActive() ? 'Graphics card is on' : 'Not available';
 }
 
 async function sameAsSource() {
@@ -2907,7 +2962,7 @@ async function sameAsSource() {
 
 // ---------------- pre-export size check ----------------
 function gpuSizeOpt() {
-  return { gpu: $('r-gpu').checked };
+  return { gpu: gpuActive() };
 }
 
 function mergedSize() {
@@ -3098,7 +3153,8 @@ async function runExport(filesOverride, optsOverride) {
   const bitrateMbps = calcNum($('r-bitrate').value) || null;
   const fps = clampInt($('r-fps').value, 1, 240);
   const imageDuration = clampInt($('r-dur').value, 1, 3600);
-  const gpu = $('r-gpu').checked;
+  const gpu = gpuActive();
+  const fastProres = fastProresActive();
 
   // audio-only export: one WAV per (video) file, no screens/mapping involved
   if (def.audioOnly) {
@@ -3229,6 +3285,7 @@ async function runExport(filesOverride, optsOverride) {
     fps,
     imageDuration,
     gpu,
+    fastProres,
     existingPolicy: plan.policy,
   };
   try {
@@ -4181,11 +4238,17 @@ function bindUI() {
   };
   $('r-codec').onchange = refreshCodecUI;
   $('r-alpha').onchange = refreshCodecUI;
+  $('r-depth').onchange = refreshCodecUI;
   $('r-fps').addEventListener('input', refreshPixelCheck);
   $('r-same-as-source').onclick = sameAsSource;
   $('r-gpu').checked = localStorage.getItem('xre:gpu') === '1';
   $('r-gpu').onchange = () => {
     localStorage.setItem('xre:gpu', $('r-gpu').checked ? '1' : '0');
+    refreshCodecUI();
+  };
+  $('r-fast-prores').checked = localStorage.getItem('xre:fastprores') === '1';
+  $('r-fast-prores').onchange = () => {
+    localStorage.setItem('xre:fastprores', $('r-fast-prores').checked ? '1' : '0');
     refreshCodecUI();
   };
   $('r-dest-btn').onclick = async () => {
@@ -4268,6 +4331,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   refreshEngineInfo();
   buildCodecSelect();
   refreshCodecUI();
+  // Tests the graphics card encoders in the background; the checkbox waits for the result
+  api.ffmpegGpu().then((r) => {
+    gpuEncoders = r || { encoders: {}, label: null };
+    refreshCodecUI();
+  }).catch(() => {
+    gpuEncoders = { encoders: {}, label: null };
+    refreshCodecUI();
+  });
 
   if (params.get('page') === 'render') switchPage('render');
   if (params.get('sel') === 'screen') selectScreen(project.screens[0].id);
