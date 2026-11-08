@@ -596,6 +596,7 @@ fs.unlinkSync(outWav);
   assert(/No such file/.test(missingSrc[0].detail) && /Command: ffmpeg/.test(missingSrc[0].detail), 'details hold the full technical text');
   ok('missing source explained, details kept');
 
+  require('./mapcheck-tests').run(ok);
   await require('./pixel-tests').run(ok, caps.proresPath, tmp);
   await require('./safe-export-tests').run(ok, caps.proresPath, tmp);
 

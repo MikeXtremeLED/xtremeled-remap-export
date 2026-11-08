@@ -392,7 +392,7 @@ async function loadAllRefs() {
 // ---------------- canvas & drawing (editor) ----------------
 function resizeCanvas() {
   const rect = canvas.parentElement.getBoundingClientRect();
-  const statusH = $('statusbar') ? $('statusbar').offsetHeight : 24;
+  const statusH = ($('statusbar') ? $('statusbar').offsetHeight : 24) + $('map-checkbar').offsetHeight;
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.max(50, rect.width);
   const ch = Math.max(50, rect.height - statusH);
@@ -482,6 +482,7 @@ function maskScreenPoints(s) {
 
 function draw() {
   if (!project || !ctx || page !== 'editor') return;
+  currentMapCheck();
   const t = vt[view];
   const { w: cw, h: ch } = cssSize();
   const { w: W, h: H } = worldSize(view);
@@ -520,6 +521,7 @@ function draw() {
   ctx.lineWidth = 1;
   ctx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
+  const labels = []; // drawn last, so the red problem marks don't cover them
   for (const s of visibleSlices(view)) {
     const r = sliceRect(s, view);
     const x = toScreenX(r.x), y = toScreenY(r.y);
@@ -569,7 +571,7 @@ function draw() {
       ctx.restore();
     }
 
-    if (w > 40 && h > 14) {
+    if (w > 40 && h > 14) labels.push(() => {
       const label = s.name;
       const extras = [];
       if (Geometry.netRotation(s)) extras.push(Geometry.netRotation(s) + '°');
@@ -593,8 +595,12 @@ function draw() {
       ctx.font = '10px -apple-system, sans-serif';
       ctx.fillStyle = off ? '#6d7276' : '#f7941e';
       ctx.fillText(sub, px, py + 7);
-    }
+      drawScalePill(s, px + bw / 2, py, x, y, w, h, bh, off);
+    });
   }
+
+  drawMapProblems();
+  labels.forEach((drawLabel) => drawLabel());
 
   const sel = selected();
   if (sel && !maskEditActive()) {
@@ -620,6 +626,174 @@ function draw() {
 function maskEditActive() {
   const s = selected();
   return maskEdit && view === 'input' && s && maskUsable(s);
+}
+
+// ---------------- mapping check ----------------
+let mapCheck = null;
+let mapCheckSig = '';
+const mapChipPos = { overlap: -1, outside: -1 };
+
+function currentMapCheck() {
+  const sig = JSON.stringify([
+    project.input,
+    project.screens,
+    project.slices.map((s) => [s.id, s.name, s.screenId, s.enabled, s.in, s.out, s.inOrient, s.outOrient, s.flip, s.mask]),
+  ]);
+  if (sig !== mapCheckSig || !mapCheck) {
+    mapCheckSig = sig;
+    mapCheck = MapCheck.analyze(project);
+    renderCheckBar();
+    refreshSliceList(); // the scale labels follow the mapping
+  }
+  return mapCheck;
+}
+
+function goToProblem(p) {
+  if (view !== p.view) switchView(p.view);
+  selectSlice(p.sliceId);
+}
+
+function renderCheckBar() {
+  const bar = $('map-checkbar');
+  const c = mapCheck;
+  const used = document.createElement('span');
+  used.className = 'chk-chip';
+  used.textContent = `Output used ${c.usedPct}%`;
+  used.title = 'Share of the output area filled with slices';
+  if (c.screens.length > 1) used.title += `\n${c.screens.map((s) => `${s.name}: ${s.usedPct}%`).join('\n')}`;
+  const chip = (kind, list, text) => {
+    if (!list.length) {
+      const ok = document.createElement('span');
+      ok.className = 'chk-chip ok';
+      ok.textContent = text;
+      return ok;
+    }
+    const b = document.createElement('button');
+    b.className = 'chk-chip bad';
+    b.textContent = text;
+    b.title = `${list.map((p) => p.message).join('\n')}\n\nClick to select ${list.length > 1 ? 'the next one' : 'the slice'}`;
+    b.onclick = () => {
+      mapChipPos[kind] = (mapChipPos[kind] + 1) % list.length;
+      goToProblem(list[mapChipPos[kind]]);
+    };
+    return b;
+  };
+  bar.replaceChildren(
+    used,
+    chip('overlap', c.overlaps, `${c.overlaps.length} overlap`),
+    chip('outside', c.outside, `${c.outside.length} out of frame`)
+  );
+}
+
+function drawHatch(rx, ry, rw, rh) {
+  const { w: cw, h: ch } = cssSize();
+  const x0 = Math.max(rx, 0), y0 = Math.max(ry, 0);
+  const x1 = Math.min(rx + rw, cw), y1 = Math.min(ry + rh, ch);
+  if (x1 <= x0 || y1 <= y0) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x0, y0, x1 - x0, y1 - y0);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(224,85,85,0.22)';
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.strokeStyle = 'rgba(224,85,85,0.9)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const span = y1 - y0;
+  for (let d = x0 - span; d < x1 + span; d += 10) {
+    ctx.moveTo(d, y1);
+    ctx.lineTo(d + span, y0);
+  }
+  ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = '#e05555';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(rx + 0.75, ry + 0.75, Math.max(0.5, rw - 1.5), Math.max(0.5, rh - 1.5));
+}
+
+function drawMapProblems() {
+  const t = vt[view];
+  const hatch = (r) => drawHatch(toScreenX(r.x), toScreenY(r.y), r.w * t.scale, r.h * t.scale);
+  const here = (p) => view === 'input' || p.screenId === activeScreen().id;
+  for (const p of mapCheck.outside) {
+    if (!here(p)) continue;
+    if (view === p.view) p.rects.forEach(hatch);
+    else if (view === 'output' && p.outRects) p.outRects.forEach(hatch);
+  }
+  if (view !== 'output') return;
+  for (const p of mapCheck.overlaps) {
+    if (!here(p)) continue;
+    for (const r of p.rects) {
+      const x = toScreenX(r.x), y = toScreenY(r.y), w = r.w * t.scale, h = r.h * t.scale;
+      ctx.fillStyle = 'rgba(224,85,85,0.5)';
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#e05555';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, w, h);
+    }
+  }
+}
+
+// The scale pill next to a slice's canvas label; only where there is room for it
+function drawScalePill(s, labelRight, cy, x, y, w, h, labelH, off) {
+  const info = MapCheck.scaleInfo(s);
+  const rgb = info.exact ? '76,175,80' : '247,148,30';
+  ctx.font = 'bold 10px -apple-system, sans-serif';
+  const pw = Math.ceil(ctx.measureText(info.label).width) + 14, ph = 18;
+  let px = Math.round(labelRight + 5), py = Math.round(cy - ph / 2);
+  if (px + pw > x + w) {
+    if (h < labelH + (ph + 4) * 2 || pw > w) return;
+    px = Math.round(x + (w - pw) / 2);
+    py = Math.round(cy + labelH / 2 + 3);
+  }
+  ctx.save();
+  if (off) ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.roundRect(px + 0.5, py + 0.5, pw - 1, ph - 1, 8.5);
+  ctx.fillStyle = 'rgba(10,12,13,0.88)';
+  ctx.fill();
+  ctx.fillStyle = `rgba(${rgb},0.18)`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${rgb},0.7)`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = info.exact ? '#7fd283' : '#ffa940';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(info.label, px + pw / 2, py + ph / 2 + 0.5);
+  ctx.restore();
+}
+
+// "This mapping has 2 problems: continue anyway?" at Start: 'go', 'fix' or null (stay here)
+function askMappingProblems(check) {
+  return new Promise((resolve) => {
+    const n = check.problems;
+    openModal(`
+      <div class="modal" style="width:480px">
+        <div class="modal-head"><span id="m-title"></span><button class="close-x" id="m-close">✕</button></div>
+        <div class="modal-body"><div class="exists-list" id="m-list"></div></div>
+        <div class="modal-foot">
+          <button id="m-go">Export anyway</button>
+          <button id="m-fix" class="accent">Fix mapping</button>
+        </div>
+      </div>
+    `);
+    $('m-title').textContent = `This mapping has ${n} problem${n === 1 ? '' : 's'}: continue anyway?`;
+    [...check.outside, ...check.overlaps].forEach((p) => {
+      const row = document.createElement('div');
+      row.textContent = p.message;
+      row.title = p.message;
+      $('m-list').appendChild(row);
+    });
+    const done = (val) => {
+      closeModal();
+      resolve(val);
+    };
+    $('m-close').onclick = () => done(null);
+    $('m-go').onclick = () => done('go');
+    $('m-fix').onclick = () => done('fix');
+    $('m-fix').focus();
+  });
 }
 
 // ---------------- hit testing ----------------
@@ -1004,7 +1178,15 @@ function refreshSliceList() {
       sz.className = 'sz';
       const r = sliceRect(s, view);
       sz.textContent = `${r.w}×${r.h}`;
-      item.append(cb, snm, sz);
+      const info = MapCheck.scaleInfo(s);
+      const pill = document.createElement('span');
+      pill.className = 'scale-pill ' + (info.exact ? 'exact' : 'scaled');
+      pill.textContent = info.label;
+      pill.title = info.exact ? 'Shown pixel for pixel' : 'Output size differs from the input size, so this slice is scaled';
+      const meta = document.createElement('div');
+      meta.className = 'sl-meta';
+      meta.append(sz, pill);
+      item.append(cb, snm, meta);
       item.addEventListener('click', () => selectSlice(s.id));
       // drag to reorder within / move between screens
       item.draggable = true;
@@ -1057,7 +1239,9 @@ function refreshScreenSelectors() {
     .map((sc, i) => `<option value="${sc.id}">${i + 1}. ${sc.name} (${sc.width}×${sc.height})</option>`)
     .join('');
   const slsel = $('sl-screen');
-  slsel.innerHTML = opts;
+  // no resolution here: the tree already lists it, and the name stays readable in the panel
+  slsel.innerHTML = project.screens.map((sc, i) => `<option value="${sc.id}">${i + 1}. ${sc.name}</option>`).join('');
+  if (selected()) slsel.value = sliceScreenId(selected());
   const rpsel = $('rp-screen-select');
   rpsel.innerHTML = opts;
   if (!project.screens.some((sc) => sc.id === rp.screenId)) rp.screenId = project.screens[0].id;
@@ -1098,6 +1282,7 @@ function refreshProps() {
   $('sl-screen').value = sliceScreenId(s);
   set('sl-in-x', s.in.x); set('sl-in-y', s.in.y); set('sl-in-w', s.in.w); set('sl-in-h', s.in.h);
   set('sl-out-x', s.out.x); set('sl-out-y', s.out.y); set('sl-out-w', s.out.w); set('sl-out-h', s.out.h);
+  $('sl-out-1to1').disabled = MapCheck.scaleInfo(s).exact;
   $('sl-in-rot').value = String(s.inOrient || 0);
   $('sl-out-rot').value = String(s.outOrient || 0);
   $('flip-label').textContent = FLIP_LABELS[s.flip || 0];
@@ -1586,6 +1771,7 @@ function syncExportList() {
     inSec: f.inSec,
     outSec: f.outSec,
     selected: f.selected !== false,
+    stretchOk: f.stretchOk || null,
   }));
   markDirty();
 }
@@ -1603,6 +1789,7 @@ function loadExportListFromProject() {
     selected: e.selected !== false,
     inSec: e.inSec != null ? e.inSec : null,
     outSec: e.outSec != null ? e.outSec : null,
+    stretchOk: e.stretchOk || null,
   }));
   rp.activeIndex = rp.files.length ? 0 : -1;
   refreshFileList();
@@ -1815,6 +2002,8 @@ function refreshFileList() {
     const sz = document.createElement('span');
     sz.className = 'sz';
     sz.textContent = f.probe && f.probe.width ? `${f.probe.width}×${f.probe.height}` : '';
+    const stretched = footageStretch(f);
+    sz.classList.toggle('warn', !!stretched);
     row.append(cb, tag, nm, sz);
     row.onclick = () => selectFile(i);
     enableReorder(row, i, (from, to) => {
@@ -1826,6 +2015,7 @@ function refreshFileList() {
       }
     });
     list.appendChild(row);
+    if (stretched) list.appendChild(footageWarnRow(f, stretched));
   });
   updateStartButton();
   $('rp-clip-name').textContent = activeFile() ? baseName(activeFile().path) : 'no selection';
@@ -1833,6 +2023,139 @@ function refreshFileList() {
   const anyImage = rp.files.some((f) => f.isImage);
   const def = currentCodec();
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
+}
+
+// null, or the footage and canvas sizes when this file would be resized to the canvas
+function footageStretch(f) {
+  if (!MapCheck.footageStretched(f.probe, project.input, f.transform)) return null;
+  const key = `${f.probe.width}x${f.probe.height}>${project.input.width}x${project.input.height}`;
+  return { key, accepted: f.stretchOk === key, footage: `${f.probe.width}×${f.probe.height}`, canvas: `${project.input.width}×${project.input.height}` };
+}
+
+function useFootageAsCanvas(f) {
+  pushHistory();
+  project.input = { width: f.probe.width, height: f.probe.height };
+  refreshAll();
+  fitView('input');
+  fitRenderView();
+  refreshPixelCheck();
+  drawRenderPreview();
+  markDirty();
+}
+
+function footageWarnRow(f, st) {
+  const box = document.createElement('div');
+  if (st.accepted) {
+    box.className = 'file-warn preflight accepted';
+    const text = document.createElement('span');
+    text.textContent = `Stretched to the ${st.canvas} canvas.`;
+    const undo = document.createElement('button');
+    undo.textContent = 'Undo';
+    undo.onclick = () => {
+      f.stretchOk = null;
+      refreshFileList();
+      syncExportList();
+    };
+    box.append(text, undo);
+    return box;
+  }
+  box.className = 'file-warn preflight';
+  const text = document.createElement('div');
+  text.textContent = `${st.footage} footage on a ${st.canvas} canvas: it will be resized, so every pixel changes.`;
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const useBtn = document.createElement('button');
+  useBtn.textContent = 'Use footage size as canvas';
+  useBtn.onclick = () => useFootageAsCanvas(f);
+  const stretchBtn = document.createElement('button');
+  stretchBtn.textContent = 'Stretch anyway';
+  stretchBtn.onclick = () => {
+    f.stretchOk = st.key;
+    refreshFileList();
+    syncExportList();
+  };
+  actions.append(useBtn, stretchBtn);
+  box.append(text, actions);
+  return box;
+}
+
+// Asked at Start for footage nobody has decided about: 'canvas', 'stretch' or null (stay here)
+function askFootageStretch(list, files) {
+  return new Promise((resolve) => {
+    // offered only when no file in this export ends up resized by the new canvas,
+    // including files that match the current canvas or were already accepted on it
+    const canvasOk = MapCheck.canvasFitsAll(files, list[0].f.probe);
+    const n = list.length;
+    openModal(`
+      <div class="modal" style="width:480px">
+        <div class="modal-head"><span id="m-title"></span><button class="close-x" id="m-close">✕</button></div>
+        <div class="modal-body">
+          <div class="note" id="m-note"></div>
+          <div class="exists-list" id="m-list"></div>
+        </div>
+        <div class="modal-foot">
+          <button id="m-cancel">Cancel</button>
+          <button id="m-stretch">Stretch anyway</button>
+          ${canvasOk ? '<button id="m-canvas" class="accent">Use footage size as canvas</button>' : ''}
+        </div>
+      </div>
+    `);
+    $('m-title').textContent = `${n} file${n === 1 ? ' does' : 's do'} not match the canvas`;
+    $('m-note').textContent = `The input canvas is ${list[0].st.canvas}. Footage of another size is resized to it, so every pixel changes.${canvasOk ? '' : ' The selected files differ in size, so no single canvas fits them all.'}`;
+    list.forEach(({ f, st }) => {
+      const row = document.createElement('div');
+      row.textContent = `${baseName(f.path)} (${st.footage})`;
+      row.title = f.path;
+      $('m-list').appendChild(row);
+    });
+    const done = (val) => {
+      closeModal();
+      resolve(val);
+    };
+    $('m-close').onclick = () => done(null);
+    $('m-cancel').onclick = () => done(null);
+    $('m-stretch').onclick = () => done('stretch');
+    if (canvasOk) {
+      $('m-canvas').onclick = () => done('canvas');
+      $('m-canvas').focus();
+    }
+  });
+}
+
+// Runs at Start, after the output mode is known. false = the export is called off.
+// Unattended exports cannot be asked, so what they carry on with ends up in the log.
+async function checkBeforeExport(files, isAuto, notes) {
+  const unsure = files.map((f) => ({ f, st: footageStretch(f) })).filter((x) => x.st && !x.st.accepted);
+  if (unsure.length && isAuto) {
+    unsure.forEach(({ f, st }) => notes.push(`${baseName(f.path)}: ${st.footage} footage resized to the ${st.canvas} canvas.`));
+  } else if (unsure.length) {
+    const choice = await askFootageStretch(unsure, files);
+    if (!choice) return false;
+    if (choice === 'canvas') {
+      useFootageAsCanvas(unsure[0].f);
+    } else {
+      unsure.forEach(({ f, st }) => { f.stretchOk = st.key; });
+      refreshFileList();
+      syncExportList();
+    }
+  }
+
+  const check = currentMapCheck();
+  if (!check.problems) return true;
+  const lines = [...check.outside, ...check.overlaps].map((p) => p.message);
+  if (isAuto) {
+    lines.forEach((l) => notes.push(`Mapping: ${l}.`));
+    return true;
+  }
+  const answer = await askMappingProblems(check);
+  if (answer === 'fix') {
+    switchPage('editor');
+    goToProblem([...check.outside, ...check.overlaps][0]);
+    return false;
+  }
+  if (answer !== 'go') return false;
+  notes.push(`Exported with ${check.problems} mapping problem${check.problems === 1 ? '' : 's'}: ${lines.join('; ')}.`);
+  return true;
 }
 
 function updateStartButton() {
@@ -2830,6 +3153,9 @@ async function runExport(filesOverride, optsOverride) {
     return;
   }
 
+  const startNotes = [];
+  if (!(await checkBeforeExport(files, !!filesOverride, startNotes))) return;
+
   const targets = []; // {proj, screen, suffix}
   if (outMode === 'separate' || outMode === 'both') {
     for (const scr of project.screens) {
@@ -2885,6 +3211,7 @@ async function runExport(filesOverride, optsOverride) {
   const plan = await resolveExisting(jobs, !!filesOverride);
   if (!plan) return;
   beginExportUI();
+  startNotes.forEach(logNote);
   logSkipped(plan.skipped);
 
   const payload = {
@@ -3129,10 +3456,15 @@ async function importXmlPath(p) {
   try {
     const text = await api.readFileText(p);
     const proj = Resolume.parseScreenSetup(text);
+    const warnings = proj.warnings || [];
+    delete proj.warnings;
     proj.refs = { input: null, output: null };
     proj.slices.forEach((s) => (s.id = uid()));
     pushHistory();
     await switchToProject(proj);
+    if (warnings.length) {
+      showImportReport('XML import', `Imported ${proj.slices.length} slice${proj.slices.length === 1 ? '' : 's'}.`, warnings);
+    }
   } catch (err) {
     alert('Import failed: ' + (err.message || err));
   }
@@ -3159,21 +3491,43 @@ async function importCsvPath(path) {
     pushHistory();
     await switchToProject(proj);
     const sc = proj.screens[0];
-    const lines = [
-      `Imported ${proj.slices.length} tile${proj.slices.length === 1 ? '' : 's'}.`,
-      '',
-      `Input canvas: ${proj.input.width} × ${proj.input.height}`,
-      `Output: ${sc.width} × ${sc.height}`,
-      '',
-      'A VideoMapper CSV holds no canvas or output resolution, so both were',
-      'derived from the tiles. Correct them on the right if your real canvas',
-      'or output is larger than the mapped area.',
-    ];
-    if (warnings.length) lines.push('', ...warnings.map((w) => '• ' + w));
-    alert(lines.join('\n'));
+    showImportReport(
+      'CSV import',
+      `Imported ${proj.slices.length} tile${proj.slices.length === 1 ? '' : 's'}. Input canvas ${proj.input.width} × ${proj.input.height}, output ${sc.width} × ${sc.height}. A VideoMapper CSV holds no canvas or output resolution, so both were derived from the tiles. Correct them on the right if your real canvas or output is larger than the mapped area.`,
+      warnings
+    );
   } catch (err) {
     alert('CSV import failed: ' + (err.message || err));
   }
+}
+
+// What an import brought in, and what it could not take over
+function showImportReport(title, intro, warnings) {
+  openModal(`
+    <div class="modal" style="width:480px">
+      <div class="modal-head"><span id="m-title"></span><button class="close-x" id="m-close">✕</button></div>
+      <div class="modal-body">
+        <div class="import-intro" id="m-intro"></div>
+        <div id="m-warn-wrap" class="hidden">
+          <div class="import-sub">Not taken over</div>
+          <div class="exists-list" id="m-list"></div>
+        </div>
+      </div>
+      <div class="modal-foot"><button id="m-ok" class="accent">OK</button></div>
+    </div>
+  `);
+  $('m-title').textContent = title;
+  $('m-intro').textContent = intro;
+  $('m-warn-wrap').classList.toggle('hidden', !warnings.length);
+  warnings.forEach((w) => {
+    const row = document.createElement('div');
+    row.textContent = w;
+    row.style.whiteSpace = 'normal';
+    $('m-list').appendChild(row);
+  });
+  $('m-close').onclick = closeModal;
+  $('m-ok').onclick = closeModal;
+  $('m-ok').focus();
 }
 
 async function exportCsv() {
@@ -3473,6 +3827,17 @@ function bindUI() {
     outLock = !outLock;
     localStorage.setItem('xre:outlock', outLock ? '1' : '0');
     refreshOutLockBtn();
+  };
+
+  $('sl-out-1to1').onclick = () => {
+    const s = selected();
+    if (!s) return;
+    pushHistory();
+    Object.assign(s.out, MapCheck.exactOutSize(s));
+    refreshProps();
+    refreshSliceList();
+    draw();
+    markDirty();
   };
 
   $('sl-flip').onclick = () => {
@@ -3887,6 +4252,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindUI();
   updateUndoButtons();
   await loadAllRefs();
+  $('status-hint').textContent = `Drag = move · Handles = resize · Shift = keep ratio · Scroll = pan · ${IS_MAC ? '⌘' : 'Ctrl'}+scroll = zoom · ${IS_MAC ? '⌘' : 'Ctrl+'}Z undo`;
   resizeCanvas();
   fitView('input');
   fitView('output');

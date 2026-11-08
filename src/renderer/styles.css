@@ -223,6 +223,24 @@ select { width: auto; }
 
 #center, #rp-center { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; }
 #editor, #rp-canvas { flex: 1; display: block; width: 100%; height: 100%; cursor: default; }
+/* Mapping check bar above the canvas */
+#map-checkbar { display: flex; align-items: center; gap: 6px; min-height: 35px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow: hidden; }
+.chk-chip { display: inline-flex; align-items: center; padding: 2px 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel2); color: var(--text); font-size: 11px; line-height: 16px; font-weight: 600; white-space: nowrap; }
+.chk-chip.ok { color: #7fd283; background: rgba(76, 175, 80, 0.14); border-color: rgba(76, 175, 80, 0.45); }
+button.chk-chip.bad { color: #f08a8a; background: rgba(224, 85, 85, 0.16); border-color: rgba(224, 85, 85, 0.6); }
+button.chk-chip.bad:hover { background: rgba(224, 85, 85, 0.28); }
+.sl-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+.scale-pill { font-size: 10px; line-height: 14px; font-weight: 600; padding: 0 7px; border-radius: 8px; border: 1px solid; white-space: nowrap; }
+.scale-pill.exact { color: #7fd283; background: rgba(76, 175, 80, 0.14); border-color: rgba(76, 175, 80, 0.45); }
+.scale-pill.scaled { color: var(--accent-hi); background: var(--accent-dim); border-color: rgba(247, 148, 30, 0.5); }
+#sl-out-1to1 { margin-left: 0; font-weight: 600; }
+#sl-screen { min-width: 0; width: 0; }
+.file-row .sz.warn { color: var(--accent-hi); font-weight: 600; }
+.preflight.file-warn { margin: 0; border-width: 0 0 1px; border-radius: 0; padding: 7px 10px; }
+.file-warn.accepted { color: var(--dim); background: none; border-color: #2b2f31; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.file-warn.accepted button { padding: 1px 7px; font-size: 11px; flex-shrink: 0; }
+.import-intro { margin-bottom: 10px; line-height: 1.5; }
+.import-sub { color: var(--accent-hi); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
 #statusbar {
   display: flex;
   justify-content: space-between;

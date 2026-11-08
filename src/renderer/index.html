@@ -101,6 +101,7 @@
       </aside>
 
       <div id="center">
+        <div id="map-checkbar"></div>
         <canvas id="editor"></canvas>
         <div id="statusbar">
           <span id="status-pos"></span>
@@ -150,6 +151,7 @@
               <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true"><path id="lock-path" d="" fill="currentColor"/></svg>
               <span id="lock-label">Free</span>
             </button>
+            <button id="sl-out-1to1" class="lock-btn" title="Set width and height to the input size (X and Y stay put)">1:1</button>
           </div>
           <div class="row4">
             <label>X</label><input type="text" inputmode="text" id="sl-out-x" class="num" />
@@ -380,6 +382,7 @@
   <script src="../shared/hippo.js"></script>
   <script src="../shared/outputs.js"></script>
   <script src="../shared/geometry.js"></script>
+  <script src="../shared/mapcheck.js"></script>
   <script src="../shared/codecs.js"></script>
   <script src="app.js"></script>
 </body>

@@ -167,6 +167,14 @@
       );
     }
 
+    // Kept for the CSV round-trip, but the export has no per-tile colour level
+    const dimmed = slices.filter((s) => s.rgb.r < 255 || s.rgb.g < 255 || s.rgb.b < 255);
+    if (dimmed.length) {
+      const named = dimmed.slice(0, 4).map((s) => `${s.name}: R${s.rgb.r} G${s.rgb.g} B${s.rgb.b}`).join(', ');
+      const more = dimmed.length > 4 ? ` and ${dimmed.length - 4} more` : '';
+      warnings.push(`${dimmed.length} tile${dimmed.length === 1 ? ' has a colour level' : 's have colour levels'} below 255 (${named}${more}). Levels are not applied: the export shows them at full level.`);
+    }
+
     const input = {
       width: Math.max(1, ...slices.map((s) => s.in.x + s.in.w)),
       height: Math.max(1, ...slices.map((s) => s.in.y + s.in.h)),
