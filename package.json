@@ -15,7 +15,7 @@
     "test": "node test/run-tests.js",
     "screenshot": "electron . --screenshot=/tmp/xre-screenshot.png",
     "fetch-ffmpeg": "node tools/fetch-ffmpeg.js",
-    "postinstall": "node tools/patch-electron-name.js && node tools/check-install.js"
+    "postinstall": "node node_modules/electron/install.js && node tools/patch-electron-name.js && node tools/check-install.js"
   },
   "devDependencies": {
     "electron": "^43.8.7",
