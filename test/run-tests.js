@@ -485,12 +485,15 @@ fs.unlinkSync(outWav);
   console.log('Test 22: plain error messages');
   const { explainError, checkOutputDir } = require('../src/main/errors');
   const ffErr = (tail) => new Error(`ffmpeg error (code 4294967294):\n${tail}`);
-  const ctx = { src: 'C:\\show\\stage.mp4', out: 'Z:\\nope\\stage_remap.mov' };
-  assert.strictEqual(explainError(ffErr('[out#0/mov @ 01] Error opening output Z:\\nope\\stage_remap.mov: No such file or directory\nError opening output files: No such file or directory'), ctx).message, 'The output folder Z:\\nope does not exist or cannot be reached.');
+  // Paths in the form of the platform the tests run on: the messages use the real path module
+  const onWindows = process.platform === 'win32';
+  const missingDir = onWindows ? 'Z:\\nope' : '/nope';
+  const ctx = { src: onWindows ? 'C:\\show\\stage.mp4' : '/show/stage.mp4', out: path.join(missingDir, 'stage_remap.mov') };
+  assert.strictEqual(explainError(ffErr('[out#0/mov @ 01] Error opening output Z:\\nope\\stage_remap.mov: No such file or directory\nError opening output files: No such file or directory'), ctx).message, `The output folder ${missingDir} does not exist or cannot be reached.`);
   assert.strictEqual(explainError(ffErr('[in#0 @ 01] Error opening input: No such file or directory\nError opening input file C:\\show\\stage.mp4.'), ctx).message, 'The source file stage.mp4 is missing or cannot be reached.');
   assert.strictEqual(explainError(ffErr('[out#0/mov @ 01] Error opening output Z:\\nope\\stage_remap.mov: Permission denied'), ctx).message, 'Could not write stage_remap.mov: the file is in use (for example by Resolume) or read-only.');
   assert.strictEqual(explainError(ffErr('[in#0 @ 01] Error opening input: Permission denied'), ctx).message, 'Could not read the source file stage.mp4: it is in use or you have no permission.');
-  assert.strictEqual(explainError(ffErr('av_interleaved_write_frame(): No space left on device\nError writing trailer'), ctx).message, 'The disk of the output folder Z:\\nope is full.');
+  assert.strictEqual(explainError(ffErr('av_interleaved_write_frame(): No space left on device\nError writing trailer'), ctx).message, `The disk of the output folder ${missingDir} is full.`);
   assert.strictEqual(explainError(ffErr('[mov @ 01] moov atom not found\nError opening input: Invalid data found when processing input'), ctx).message, 'The source file stage.mp4 is damaged, incomplete or not a video this app can read.');
   assert.strictEqual(explainError(ffErr('[hap @ 01] Video size 322x33 is not multiple of 4.\nConversion failed!'), ctx).message, "The codec can't make 322×33: width and height must be divisible by 4.");
   assert.strictEqual(explainError(ffErr('[vost @ 01] Some strange failure here\nConversion failed!'), ctx).message, 'Export failed: Some strange failure here');
