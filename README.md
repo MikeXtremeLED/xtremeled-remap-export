@@ -15,6 +15,13 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/MikeXtremeLED/xtremeled-remap-export/raw/main/docs/promo-2.0.mp4">
+    <img src="docs/promo-2.0.webp" width="720" alt="XtremeLED Remap Export 2.0 in action" /><br>
+    <b>New in 2.0: download the full 60-second video with sound</b>
+  </a>
+</p>
+
 ![Stageview content → XtremeLED Remap Export → output mapped](docs/hero.png)
 
 <p align="center">
