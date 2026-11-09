@@ -102,6 +102,14 @@
             <button id="tp-save">Save PNG…</button>
           </div>
           <div class="row"><button id="tp-export">Send to Export page</button></div>
+          <div class="row check-row">
+            <label for="tp-grid">Panel grid</label>
+            <input type="checkbox" id="tp-grid" />
+            <input type="text" inputmode="text" id="tp-grid-w" class="num" style="width:52px" title="Panel width in pixels" />
+            <label style="min-width:auto">×</label>
+            <input type="text" inputmode="text" id="tp-grid-h" class="num" style="width:52px" title="Panel height in pixels" />
+            <span class="dim">px</span>
+          </div>
         </div>
       </aside>
 
@@ -218,10 +226,32 @@
           <div class="tabs">
             <button id="rp-tab-input" class="tab active">Input view</button>
             <button id="rp-tab-output" class="tab">Output view</button>
+            <button id="rp-tab-check" class="tab" title="Export the current frame for real and compare every slice with the source">Check frame</button>
+          </div>
+          <div id="ck-tools" class="hidden">
+            <div class="tb-sep"></div>
+            <button id="ck-100" title="Toggle 100% and fit">100%</button>
+            <button id="ck-next" title="Jump to the next place where two slices meet">Next seam</button>
           </div>
           <select id="rp-screen-select" class="hidden" title="Screen to preview"></select>
         </div>
         <canvas id="rp-canvas"></canvas>
+        <div id="ck-wrap" class="hidden">
+          <div id="ck-view">
+            <canvas id="ck-canvas"></canvas>
+            <div id="ck-coords" class="hidden"></div>
+            <div id="ck-status" class="hidden"></div>
+          </div>
+          <div id="ck-side">
+            <div class="panel-title">Slices</div>
+            <div id="ck-rows"></div>
+            <div id="ck-note" class="note"></div>
+            <div id="ck-stale" class="hidden">
+              <span>The frame or the settings changed.</span>
+              <button id="ck-again">Check again</button>
+            </div>
+          </div>
+        </div>
         <div id="rp-timeline">
           <div class="tl-row">
             <span id="tl-cur" class="tc">00:00:00.00</span>
@@ -345,6 +375,16 @@
             <input type="text" inputmode="text" id="r-bitrate" class="num" style="width:70px" min="1" max="400" placeholder="auto" />
             <span class="dim">Mbps (empty = quality mode)</span>
           </div>
+          <div class="row" id="r-rate-row">
+            <label>Output rate</label>
+            <select id="r-rate" title="Frame rate of the export; frames are repeated or dropped to reach it">
+              <option value="source">Same as source</option>
+              <option value="25">25 fps</option>
+              <option value="30">30 fps</option>
+              <option value="50">50 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
           <div class="row">
             <button id="r-same-as-source" title="Match codec, bit depth and bitrate of the selected footage">Remap same as source</button>
           </div>
@@ -418,6 +458,7 @@
   <script src="../shared/mapcheck.js"></script>
   <script src="../shared/projectdoc.js"></script>
   <script src="../shared/codecs.js"></script>
+  <script src="../shared/conform.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

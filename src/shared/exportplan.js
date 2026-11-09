@@ -36,6 +36,11 @@
     if (Number.isFinite(raw.fps) && raw.fps >= 1 && raw.fps <= 240) out.fps = raw.fps;
     if (Number.isFinite(raw.dur) && raw.dur >= 1 && raw.dur <= 3600) out.dur = raw.dur;
     if (raw.destDir === null || (typeof raw.destDir === 'string' && raw.destDir)) out.destDir = raw.destDir;
+    if (['source', '25', '30', '50', '60'].includes(raw.rate)) out.rate = raw.rate;
+    const grid = raw.panelGrid;
+    if (grid && typeof grid === 'object' && Number.isInteger(grid.w) && Number.isInteger(grid.h) && grid.w > 1 && grid.h > 1) {
+      out.panelGrid = { on: !!grid.on, w: grid.w, h: grid.h };
+    }
     return out;
   }
 

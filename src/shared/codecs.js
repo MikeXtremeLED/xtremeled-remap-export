@@ -310,6 +310,31 @@
     return String(v);
   }
 
+  // How a source rate relates to an output rate. 'uneven' means frames repeat or drop in a
+  // pattern the eye can see; 'repeat' and 'drop' are whole multiples, so they stay smooth.
+  function rateRelation(sourceFps, outFps) {
+    const exactValue = (fps) => {
+      const v = Number(fps);
+      if (Number.isInteger(v)) return v;
+      const whole = Math.round(v * 1.001);
+      return Math.abs(whole / 1.001 - v) < 0.006 ? whole / 1.001 : v;
+    };
+    const s = exactValue(sourceFps);
+    const o = exactValue(outFps);
+    if (!(s > 0) || !(o > 0)) return { kind: 'same', factor: 1 };
+    const near = (r) => Math.abs(r - Math.round(r)) < 0.0005;
+    if (Math.abs(s - o) < 0.0005) return { kind: 'same', factor: 1 };
+    if (o > s && near(o / s)) return { kind: 'repeat', factor: Math.round(o / s) };
+    if (s > o && near(s / o)) return { kind: 'drop', factor: Math.round(s / o) };
+    return { kind: 'uneven', factor: o / s };
+  }
+
+  function rateNote(sourceFps, outFps) {
+    const rel = rateRelation(sourceFps, outFps);
+    if (rel.kind !== 'uneven') return null;
+    return `${Number(sourceFps).toFixed(2).replace(/\.?0+$/, '')} fps to ${outFps} fps is not a whole multiple: frames repeat or drop unevenly, which can show as judder.`;
+  }
+
   const WORK_FORMATS = {
     '420-8': { overlay: 'yuv420', pix: 'yuv420p', alphaPix: 'yuva420p', maskPix: 'yuva420p', hsub: 1, vsub: 1, label: '8-bit 4:2:0' },
     '422-8': { overlay: 'yuv422', pix: 'yuv422p', alphaPix: 'yuva422p', maskPix: 'yuva422p', hsub: 1, vsub: 0, label: '8-bit 4:2:2' },
@@ -487,5 +512,5 @@
     return { state: 'partial', text: `${okCount} of ${total} exported, ${failed} failed` };
   }
 
-  return { CODECS, byId, matchSource, encoderArgs, gpuCapable, GPU_FAMILIES, gpuFamilies, gpuEncoderName, gpuFor, isGpuFailure, fastProresCapable, writesBt709, sizeRule, fitOutputSize, sizeProblem, parsePixFmt, exactRate, pixelPlan, compositePlan, pixelCheckRows, codecFidelityNote, batchOutcome };
+  return { CODECS, byId, matchSource, encoderArgs, gpuCapable, GPU_FAMILIES, gpuFamilies, gpuEncoderName, gpuFor, isGpuFailure, fastProresCapable, writesBt709, sizeRule, fitOutputSize, sizeProblem, parsePixFmt, exactRate, rateRelation, rateNote, pixelPlan, compositePlan, pixelCheckRows, codecFidelityNote, batchOutcome };
 });

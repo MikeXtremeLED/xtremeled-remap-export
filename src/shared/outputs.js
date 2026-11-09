@@ -77,6 +77,9 @@
         warnings.push(`${actual.frames} frames, expected ${expect.frames}`);
       }
     }
+    if (expect.timecode && (actual.timecode || '').replace(/\D/g, '') !== expect.timecode.replace(/\D/g, '')) {
+      warnings.push(actual.timecode ? `timecode is ${actual.timecode}, expected ${expect.timecode}` : `timecode ${expect.timecode} was not written`);
+    }
     return warnings;
   }
 

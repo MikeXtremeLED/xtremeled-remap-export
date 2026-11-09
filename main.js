@@ -594,12 +594,15 @@ ipcMain.handle('render:start', async (e, payload) => {
 ipcMain.handle('render:cancel', () => renderMod.cancel());
 ipcMain.handle('estimate:sample', (e, payload) => renderMod.sampleOutputSize(payload));
 ipcMain.handle('render:existing', (e, targets) => renderMod.existingOutputs(targets));
-ipcMain.handle('preview:probe', (e, src) => {
+ipcMain.handle('preview:probe', (e, src, sequence) => {
   const caps = renderMod.getCapabilities();
   if (!caps.proresPath) throw new Error('ffmpeg not found');
-  return renderMod.probeMedia(caps.proresPath, src);
+  return renderMod.probeSource(caps.proresPath, src, sequence);
 });
-ipcMain.handle('preview:frame', (e, src, timeSec) => renderMod.extractFrame(src, timeSec || 0));
+ipcMain.handle('preview:frame', (e, src, timeSec, sequence) => renderMod.extractFrame(src, timeSec || 0, sequence));
+ipcMain.handle('check:frame', (e, payload) => renderMod.checkFrame(payload));
+ipcMain.handle('test:player', (e, input) => renderMod.makePlayerTest(BrowserWindow.fromWebContents(e.sender), input));
+ipcMain.handle('footage:scan', (e, paths, mediaExts, keepOtherFiles) => renderMod.scanFootage(paths, mediaExts, keepOtherFiles));
 ipcMain.handle('preview:waveform', (e, src) => {
   try {
     return renderMod.extractWaveform(src);

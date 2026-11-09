@@ -32,6 +32,8 @@ let uidCounter = 1;
 const uid = () => 'sl' + uidCounter++ + '_' + Math.random().toString(36).slice(2, 7);
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp', 'webp', 'gif'];
+// Footage can also be a format the browser can't show, as a reference image can't
+const FOOTAGE_IMAGE_EXTS = [...IMAGE_EXTS, 'exr', 'dpx'];
 const VIDEO_EXTS = ['mov', 'mp4', 'm4v', 'avi', 'mkv', 'mxf', 'webm', 'mpg', 'mpeg'];
 
 const HANDLES = [
@@ -107,7 +109,7 @@ function extOf(p) {
   return m ? m[1] : '';
 }
 function isImagePath(p) {
-  return IMAGE_EXTS.includes(extOf(p));
+  return FOOTAGE_IMAGE_EXTS.includes(extOf(p));
 }
 // Safe arithmetic evaluator so number fields can be used as a calculator
 // (supports + - * / and parentheses, e.g. "1920/2", "100*1.5", "(3840-64)/3").
@@ -1337,7 +1339,7 @@ function refreshScreenSelectors() {
   rpsel.innerHTML = opts;
   if (!project.screens.some((sc) => sc.id === rp.screenId)) rp.screenId = project.screens[0].id;
   rpsel.value = rp.screenId;
-  rpsel.classList.toggle('hidden', !(project.screens.length > 1 && rp.viewMode === 'output'));
+  rpsel.classList.toggle('hidden', !(project.screens.length > 1 && (rp.viewMode === 'output' || ck.active)));
 }
 
 // Write a value into a form field, but never into the one the user is typing in.
@@ -1739,38 +1741,53 @@ function askOutputMode(clipCount) {
 function makeTestPatternCanvas() {
   const IW = project.input.width, IH = project.input.height;
   const k = Math.min(1, 16384 / Math.max(IW, IH));
+  if (k < 1) showToast('Canvas wider than 16384 px: this pattern is scaled, so its lines are not pixel-exact');
   const c = document.createElement('canvas');
   c.width = Math.max(2, Math.round(IW * k));
   c.height = Math.max(2, Math.round(IH * k));
   const g = c.getContext('2d');
+  // Whole device pixels only: a line on x.5 would land half on two columns
+  const pxRect = (r) => [Math.round(r.x * k), Math.round(r.y * k), Math.max(1, Math.round(r.w * k)), Math.max(1, Math.round(r.h * k))];
+  const fillAll = (rects) => rects.forEach((r) => g.fillRect(...pxRect(r)));
 
-  // checker background
-  const cell = Math.max(10, Math.round(50 * k));
-  for (let y = 0, j = 0; y < c.height; y += cell, j++) {
-    for (let x = 0, i = 0; x < c.width; x += cell, i++) {
+  const grid = panelGridSize();
+  // checker background: half a panel when the panel grid is on
+  const cellW = grid ? Math.max(2, Math.round((grid.w / 2) * k)) : Math.max(10, Math.round(50 * k));
+  const cellH = grid ? Math.max(2, Math.round((grid.h / 2) * k)) : cellW;
+  for (let y = 0, j = 0; y < c.height; y += cellH, j++) {
+    for (let x = 0, i = 0; x < c.width; x += cellW, i++) {
       g.fillStyle = (i + j) % 2 ? '#26292d' : '#33373c';
-      g.fillRect(x, y, cell, cell);
+      g.fillRect(x, y, cellW, cellH);
     }
   }
-  // 100px grid, stronger every 500px
-  for (let x = 0; x <= IW; x += 100) {
-    g.strokeStyle = x % 500 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
-    g.lineWidth = 1;
-    g.beginPath(); g.moveTo(x * k, 0); g.lineTo(x * k, c.height); g.stroke();
-  }
-  for (let y = 0; y <= IH; y += 100) {
-    g.strokeStyle = y % 500 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
-    g.beginPath(); g.moveTo(0, y * k); g.lineTo(c.width, y * k); g.stroke();
+  if (!grid) {
+    // 100px grid, stronger every 500px
+    for (let x = 0; x <= IW; x += 100) {
+      g.fillStyle = x % 500 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
+      g.fillRect(Math.round(x * k), 0, 1, c.height);
+    }
+    for (let y = 0; y <= IH; y += 100) {
+      g.fillStyle = y % 500 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
+      g.fillRect(0, Math.round(y * k), c.width, 1);
+    }
   }
 
   const colors = ['#f7941e', '#35e0b2', '#4fa3ff', '#e85dd0', '#ffd028', '#7fe860'];
-  project.slices.forEach((s, i) => {
-    if (s.enabled === false) return;
+  const slices = project.screens.flatMap((scr) => Geometry.effectiveSlices(project, scr.id));
+  slices.forEach((eff, n) => {
+    const i = project.slices.indexOf(eff.slice);
     const col = colors[i % colors.length];
-    const x = s.in.x * k, y = s.in.y * k, w = s.in.w * k, h = s.in.h * k;
+    const x = eff.crop.x * k, y = eff.crop.y * k, w = eff.crop.w * k, h = eff.crop.h * k;
+    g.save();
+    g.beginPath();
+    g.rect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    g.clip();
+    if (grid) {
+      g.fillStyle = 'rgba(255,255,255,0.28)';
+      fillAll(Conform.panelLines(eff.crop, grid.w, grid.h));
+    }
     g.strokeStyle = col;
-    g.lineWidth = Math.max(1.5, 3 * k);
-    g.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    g.lineWidth = 1;
     g.beginPath();
     g.moveTo(x, y); g.lineTo(x + w, y + h);
     g.moveTo(x + w, y); g.lineTo(x, y + h);
@@ -1779,25 +1796,129 @@ function makeTestPatternCanvas() {
     g.arc(x + w / 2, y + h / 2, Math.max(4, Math.min(w, h) / 2 - 2), 0, Math.PI * 2);
     g.stroke();
 
+    const marks = Conform.sliceMarkers(eff, grid ? { panelW: grid.w, panelH: grid.h } : {});
+    g.fillStyle = '#000';
+    fillAll(marks.bands);
+    g.fillStyle = col;
+    fillAll(marks.teeth);
+    g.fillStyle = '#fff';
+    fillAll(marks.ticks);
+    g.restore();
+
     // label pill that always fits inside the slice
-    const label = `${i + 1} · ${s.name} · ${s.in.w}×${s.in.h}`;
-    let fs = Math.min(h * 0.28, 64 * Math.max(k, 0.5), w * 0.5);
+    const label = `${i + 1} · ${eff.slice.name} · ${eff.crop.w}×${eff.crop.h}`;
+    const coords = Conform.coordsLabel(eff);
+    let fs = Math.min(h * 0.18, 40 * Math.max(k, 0.5), w * 0.5);
     fs = Math.max(9, fs);
-    g.font = `bold ${fs}px -apple-system, sans-serif`;
-    while (fs > 9 && g.measureText(label).width > w * 0.85) {
-      fs *= 0.92;
-      g.font = `bold ${fs}px -apple-system, sans-serif`;
-    }
-    const tw = g.measureText(label).width;
-    const pw = tw + fs * 1.2, ph = fs * 1.7;
+    const widest = (size) => {
+      g.font = `bold ${size}px -apple-system, sans-serif`;
+      const t1 = g.measureText(label).width;
+      g.font = `bold ${size * 0.5}px -apple-system, sans-serif`;
+      return Math.max(t1, g.measureText(coords).width);
+    };
+    while (fs > 9 && widest(fs) > w * 0.85) fs *= 0.92;
+    const pw = widest(fs) + fs * 1.2, ph = fs * 2.5;
     g.fillStyle = 'rgba(8,10,12,0.82)';
     g.fillRect(x + w / 2 - pw / 2, y + h / 2 - ph / 2, pw, ph);
     g.fillStyle = '#ffffff';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText(label, x + w / 2, y + h / 2 + fs * 0.05);
+    g.font = `bold ${fs}px -apple-system, sans-serif`;
+    g.fillText(label, x + w / 2, y + h / 2 - fs * 0.35);
+    g.font = `bold ${fs * 0.5}px -apple-system, sans-serif`;
+    g.fillStyle = '#ffd28a';
+    g.fillText(coords, x + w / 2, y + h / 2 + fs * 0.7);
   });
   return c;
+}
+
+function panelGridSize() {
+  const grid = rp.panelGrid;
+  return grid.on && grid.w > 0 && grid.h > 0 ? { w: grid.w, h: grid.h } : null;
+}
+
+function refreshPanelGridUI() {
+  const grid = rp.panelGrid;
+  $('tp-grid').checked = grid.on;
+  setField('tp-grid-w', grid.w);
+  setField('tp-grid-h', grid.h);
+  $('tp-grid-w').disabled = !grid.on;
+  $('tp-grid-h').disabled = !grid.on;
+}
+
+function setPanelGrid(on, w, h) {
+  rp.panelGrid = { on: !!on, w: clampInt(w, 2, 4096), h: clampInt(h, 2, 4096) };
+  refreshPanelGridUI();
+  exportSettingsChanged();
+}
+
+// The rate the show will run at: the export rate, else the active clip's. The still-image
+// rate only counts when there is no moving footage to go by.
+function playerTestRate() {
+  const f = activeFile();
+  const clipRate = f && !f.isImage ? (f.probe && f.probe.fps) || (f.sequence && f.sequence.fps) : 0;
+  return outputRate() || clipRate || clampInt($('r-fps').value, 1, 240);
+}
+
+// Pick the kind of test: the still pattern or the moving player test
+function askTestPattern() {
+  const rate = playerTestRate();
+  const grid = rp.panelGrid;
+  openModal(`
+    <div class="modal" style="width:440px">
+      <div class="modal-head"><span>Test pattern</span><button class="close-x" id="m-close">✕</button></div>
+      <div class="modal-body">
+        <div class="tp-kind">
+          <label><input type="radio" name="tp-kind" value="still" checked /><span>Still pattern<small>One-pixel lines and edge markers on every slice, with input and output coordinates.</small></span></label>
+          <label><input type="radio" name="tp-kind" value="player" /><span>Player test (${Conform.PLAYER_TEST_SECONDS} s at ${rate} fps)<small>A moving one-pixel bar and a frame counter. A player that drops frames or tears shows it here.</small></span></label>
+        </div>
+        <div class="row check-row">
+          <label for="m-grid">Panel grid</label>
+          <input type="checkbox" id="m-grid" ${grid.on ? 'checked' : ''} />
+          <input type="text" inputmode="text" id="m-grid-w" class="num" style="width:56px" value="${grid.w}" />
+          <label style="min-width:auto">×</label>
+          <input type="text" inputmode="text" id="m-grid-h" class="num" style="width:56px" value="${grid.h}" />
+          <span class="dim">px</span>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button id="m-cancel">Cancel</button>
+        <button id="m-add" class="accent">Add</button>
+      </div>
+    </div>
+  `);
+  $('m-close').onclick = closeModal;
+  $('m-cancel').onclick = closeModal;
+  $('m-add').onclick = () => {
+    const kind = document.querySelector('input[name="tp-kind"]:checked').value;
+    setPanelGrid($('m-grid').checked, $('m-grid-w').value, $('m-grid-h').value);
+    closeModal();
+    if (kind === 'player') addPlayerTest();
+    else addTestPattern();
+  };
+}
+
+async function addPlayerTest() {
+  const button = $('rp-testpattern');
+  button.disabled = true;
+  showToast('Building player test…');
+  try {
+    const slices = project.screens.flatMap((scr) => Geometry.effectiveSlices(project, scr.id));
+    const file = await api.makePlayerTest({
+      name: sanitizeName(project.name),
+      width: project.input.width,
+      height: project.input.height,
+      fps: playerTestRate(),
+      slices,
+    });
+    if (page !== 'render') switchPage('render');
+    await addFootage([file], { select: true });
+    showToast('Player test added');
+  } catch (e) {
+    alert('Player test failed: ' + (e.message || e));
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function addTestPattern() {
@@ -1834,6 +1955,334 @@ async function saveTestPattern() {
   api.showInFolder(p);
 }
 
+// ---------------- check frame ----------------
+// The Check frame tab: the real export of this frame at 100%, a verdict per slice and a way
+// to walk along every seam. The picture and the verdict both come from the main process.
+const ck = {
+  active: false,
+  running: false,
+  run: 0,
+  result: null,
+  img: null,
+  key: null,
+  zoom: 1,
+  x: 0,
+  y: 0,
+  seam: -1,
+  selected: -1,
+  drag: null,
+  message: '',
+};
+
+function ckScreen() {
+  return project.screens.find((s) => s.id === rp.screenId) || project.screens[0];
+}
+
+// What decides the picture: when this changes, the verdict on screen is about something else
+function ckKey(f) {
+  return JSON.stringify([f && f.path, f && !f.isImage ? f.curTime || 0 : 0, f && f.transform, f && f.sequence && f.sequence.fps, project.input, project.slices, ckScreen().id, $('r-codec').value, $('r-alpha').value, $('r-depth').value, $('r-bitrate').value, gpuActive(), fastProresActive()]);
+}
+
+function ckSetMessage(text) {
+  ck.message = text || '';
+  $('ck-status').textContent = ck.message;
+  $('ck-status').classList.toggle('hidden', !ck.message);
+}
+
+function refreshCheckStale() {
+  if (!ck.active) return;
+  const stale = !!(ck.result && !ck.running && ck.key !== ckKey(activeFile()));
+  $('ck-stale').classList.toggle('hidden', !stale);
+}
+
+function enterCheck() {
+  ck.active = true;
+  stopPlayback(false);
+  $('rp-tab-input').classList.remove('active');
+  $('rp-tab-output').classList.remove('active');
+  $('rp-tab-check').classList.add('active');
+  rpCanvas.classList.add('ck-off');
+  $('ck-wrap').classList.remove('hidden');
+  $('ck-tools').classList.remove('hidden');
+  refreshScreenSelectors();
+  refreshCheckStale();
+  if (!ck.result || ck.key !== ckKey(activeFile())) runFrameCheck();
+  else drawCheck();
+}
+
+function exitCheck() {
+  if (!ck.active) return;
+  ck.active = false;
+  $('rp-tab-check').classList.remove('active');
+  rpCanvas.classList.remove('ck-off');
+  $('ck-wrap').classList.add('hidden');
+  $('ck-tools').classList.add('hidden');
+  refreshScreenSelectors();
+  resizeRenderCanvas();
+}
+
+function setPreviewTab(mode) {
+  if (mode === 'check') {
+    enterCheck();
+    return;
+  }
+  rp.viewMode = mode;
+  exitCheck();
+  $('rp-tab-input').classList.toggle('active', mode === 'input');
+  $('rp-tab-output').classList.toggle('active', mode === 'output');
+  refreshScreenSelectors();
+  fitRenderView();
+  drawRenderPreview();
+}
+
+function loadCheckImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('The checked frame could not be loaded.'));
+    img.src = url;
+  });
+}
+
+async function runFrameCheck() {
+  const f = activeFile();
+  // This check takes over: whatever an earlier one still delivers is ignored
+  const run = ++ck.run;
+  ck.running = false;
+  ck.result = null;
+  ck.img = null;
+  renderCheckRows();
+  drawCheck();
+  refreshCheckStale();
+  if (!f || f.missing) {
+    ckSetMessage(f ? 'This footage is missing.' : 'Add footage first.');
+    return;
+  }
+  const def = currentCodec();
+  if (def.audioOnly) {
+    ckSetMessage('An audio export has no picture to check.');
+    return;
+  }
+  if (rp.running) {
+    ckSetMessage('An export is running.');
+    return;
+  }
+  const key = ckKey(f);
+  ck.running = true;
+  ckSetMessage('Rendering this frame…');
+  const scr = ckScreen();
+  try {
+    const maskFiles = await buildMaskFiles(project, scr.id);
+    if (run !== ck.run) return;
+    const res = await api.checkFrame({
+      project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices },
+      job: { src: f.path, isImage: f.isImage, sequence: f.sequence || null, transform: f.transform, screen: { id: scr.id, name: scr.name, width: scr.width, height: scr.height }, maskFiles },
+      codec: def.id,
+      alpha: $('r-alpha').value,
+      depth: parseInt($('r-depth').value, 10),
+      bitrateMbps: calcNum($('r-bitrate').value) || null,
+      fps: clampInt($('r-fps').value, 1, 240),
+      outFps: outputRate(),
+      imageDuration: clampInt($('r-dur').value, 1, 3600),
+      gpu: gpuActive(),
+      fastProres: fastProresActive(),
+      atSec: f.isImage ? 0 : f.curTime || 0,
+    });
+    if (run !== ck.run) return;
+    if (res.stale) {
+      // only an export can stop the current check
+      ckSetMessage(rp.running ? 'An export is running.' : '');
+      return;
+    }
+    if (res.busy) {
+      ckSetMessage('An export is running.');
+      return;
+    }
+    const url = await api.pathToFileUrl(res.image);
+    const img = await loadCheckImage(url);
+    if (run !== ck.run) return;
+    ck.result = res;
+    ck.img = img;
+    ck.key = key;
+    ck.seam = -1;
+    ck.zoom = 1;
+    ckGoToSeam();
+    ckSetMessage('');
+    renderCheckRows();
+    drawCheck();
+    refreshCheckStale();
+  } catch (e) {
+    if (run !== ck.run) return;
+    // an export that starts ends a running check on purpose
+    const why = ipcMessage(e).split('\n')[0];
+    ckSetMessage(rp.running ? 'An export is running.' : `The frame could not be checked.${/^ffmpeg error/.test(why) ? '' : ` ${why}`}`);
+  } finally {
+    if (run === ck.run) {
+      ck.running = false;
+      refreshCheckStale();
+    }
+  }
+}
+
+function checkTagFor(row) {
+  if (row.state === 'identical') return { cls: 'identical', text: '✓ Pixel-identical' };
+  if (row.state === 'different') return { cls: 'different', text: `${row.different.toLocaleString('en-US')} pixel${row.different === 1 ? '' : 's'} differ` };
+  if (row.state === 'scaled') return { cls: 'other', text: 'Scaled, not compared' };
+  if (row.state === 'masked') return { cls: 'other', text: 'Masked, not compared' };
+  if (row.state === 'covered') return { cls: 'other', text: 'Not visible, not compared' };
+  return { cls: 'other', text: 'Not compared' };
+}
+
+function renderCheckRows() {
+  const list = $('ck-rows');
+  list.innerHTML = '';
+  const res = ck.result;
+  if (!res) {
+    $('ck-note').textContent = '';
+    return;
+  }
+  res.rows.forEach((row, i) => {
+    const el = document.createElement('div');
+    el.className = 'file-row' + (i === ck.selected ? ' selected' : '');
+    const text = document.createElement('span');
+    text.className = 'ck-text';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = `${i + 1} · ${row.name}`;
+    nm.title = row.label;
+    const sz = document.createElement('span');
+    sz.className = 'sz';
+    sz.textContent = `${row.place.w}×${row.place.h}`;
+    text.append(nm, sz);
+    const tagInfo = checkTagFor(row);
+    const tag = document.createElement('span');
+    tag.className = `ck-tag ${tagInfo.cls}`;
+    tag.textContent = tagInfo.text;
+    el.append(text, tag);
+    el.onclick = () => {
+      ck.selected = i;
+      ck.zoom = 1;
+      ck.x = row.place.x + row.place.w / 2;
+      ck.y = row.place.y + row.place.h / 2;
+      renderCheckRows();
+      drawCheck();
+    };
+    list.appendChild(el);
+  });
+  const notes = ['This frame, exported with the current settings and compared with the source, slice by slice.'];
+  if (res.lossy) notes.push(`Shown after ${res.codecLabel}; the comparison is made before compression, otherwise every lossy format would read as a broken mapping.`);
+  if (res.codecProblem) notes.push(res.codecProblem);
+  if (res.lumaOnly) notes.push('This source shares colour between neighbouring pixels, so brightness is compared.');
+  $('ck-note').textContent = notes.join(' ');
+}
+
+function ckFitZoom() {
+  const cw = $('ck-canvas').width || 1, ch = $('ck-canvas').height || 1;
+  if (!ck.img) return 1;
+  return Math.min(1, cw / ck.img.width, ch / ck.img.height);
+}
+
+function ckGoToSeam() {
+  const res = ck.result;
+  if (!res) return;
+  const points = res.seams.length
+    ? res.seams
+    : res.rows.map((row, i) => ({ x: row.place.x + row.place.w / 2, y: row.place.y + row.place.h / 2, a: i }));
+  if (!points.length) return;
+  ck.seam = (ck.seam + 1) % points.length;
+  const p = points[ck.seam];
+  ck.x = p.x;
+  ck.y = p.y;
+  ck.selected = p.a != null ? p.a : -1;
+}
+
+function ckNextSeam() {
+  if (!ck.result) return;
+  ck.zoom = 1;
+  ckGoToSeam();
+  renderCheckRows();
+  drawCheck();
+}
+
+function drawCheck() {
+  const view = $('ck-view');
+  if (!view) return;
+  const c = $('ck-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = view.clientWidth, cssH = view.clientHeight;
+  if (!cssW || !cssH) return;
+  c.width = Math.max(1, Math.round(cssW * dpr));
+  c.height = Math.max(1, Math.round(cssH * dpr));
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  g.fillStyle = '#16181a';
+  g.fillRect(0, 0, c.width, c.height);
+  $('ck-100').classList.toggle('on', ck.zoom === 1);
+  if (!ck.img) {
+    $('ck-coords').classList.add('hidden');
+    return;
+  }
+  const z = ck.zoom; // canvas (device) pixels per output pixel
+  const iw = ck.img.width, ih = ck.img.height;
+  const clampCenter = (v, size, half) => (size * z <= half * 2 ? size / 2 : Math.max(half / z, Math.min(size - half / z, v)));
+  ck.x = clampCenter(ck.x, iw, c.width / 2);
+  ck.y = clampCenter(ck.y, ih, c.height / 2);
+  const dx = Math.round(c.width / 2 - ck.x * z);
+  const dy = Math.round(c.height / 2 - ck.y * z);
+  g.drawImage(ck.img, 0, 0, iw, ih, dx, dy, Math.round(iw * z), Math.round(ih * z));
+  // the slice in the middle of the view
+  const res = ck.result;
+  const coords = $('ck-coords');
+  const hit = res ? [...res.rows].reverse().find((r) => ck.x >= r.place.x && ck.x < r.place.x + r.place.w && ck.y >= r.place.y && ck.y < r.place.y + r.place.h) : null;
+  coords.classList.toggle('hidden', !hit);
+  if (hit) {
+    coords.textContent = hit.label;
+    coords.style.top = `${Math.min(cssH - 28, cssH / 2 + 42)}px`;
+  }
+}
+
+function bindCheckView() {
+  const view = $('ck-view');
+  view.addEventListener('wheel', (e) => {
+    if (!ck.img) return;
+    e.preventDefault();
+    const c = $('ck-canvas');
+    const rect = c.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cursorX = (e.clientX - rect.left) * dpr, cursorY = (e.clientY - rect.top) * dpr;
+    const toImage = (cx, v, half, z) => v + (cx - half) / z;
+    const atX = toImage(cursorX, ck.x, c.width / 2, ck.zoom);
+    const atY = toImage(cursorY, ck.y, c.height / 2, ck.zoom);
+    const next = Math.max(ckFitZoom(), Math.min(8, ck.zoom * (e.deltaY < 0 ? 1.25 : 0.8)));
+    ck.zoom = Math.abs(next - 1) < 0.04 ? 1 : next;
+    ck.x = atX - (cursorX - c.width / 2) / ck.zoom;
+    ck.y = atY - (cursorY - c.height / 2) / ck.zoom;
+    drawCheck();
+  }, { passive: false });
+  view.addEventListener('mousedown', (e) => {
+    ck.drag = { x: e.clientX, y: e.clientY, ox: ck.x, oy: ck.y };
+    view.classList.add('grabbing');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!ck.drag) return;
+    const dpr = window.devicePixelRatio || 1;
+    ck.x = ck.drag.ox - ((e.clientX - ck.drag.x) * dpr) / ck.zoom;
+    ck.y = ck.drag.oy - ((e.clientY - ck.drag.y) * dpr) / ck.zoom;
+    drawCheck();
+  });
+  window.addEventListener('mouseup', () => {
+    ck.drag = null;
+    view.classList.remove('grabbing');
+  });
+  $('ck-100').onclick = () => {
+    ck.zoom = ck.zoom === 1 ? ckFitZoom() : 1;
+    drawCheck();
+  };
+  $('ck-next').onclick = ckNextSeam;
+  $('ck-again').onclick = runFrameCheck;
+  new ResizeObserver(() => { if (ck.active) drawCheck(); }).observe(view);
+}
+
 // ---------------- export page ----------------
 const STATUS_ICONS = {
   done: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M2.5 7.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -1863,6 +2312,7 @@ const rp = {
   vt: { scale: 0.1, ox: 40, oy: 40 },
   preflightMode: 'separate', // output mode the size check looks at (set by the last Start)
   padAcceptedKey: null, // codec + sizes the user agreed to pad (see preflightKey)
+  panelGrid: { on: false, w: 104, h: 104 }, // the optional LED panel grid of the test pattern
 };
 let rpCanvas, rpCtx;
 let frameTimer = null;
@@ -1881,18 +2331,21 @@ function syncExportList() {
     outSec: f.outSec,
     selected: f.selected !== false,
     stretchOk: f.stretchOk || null,
+    sequence: f.sequence || null,
   }));
   markDirty();
   refreshActiveRowLength();
   refreshPanelDots();
   scheduleEstimate();
+  refreshCheckStale();
 }
 
 function loadExportListFromProject() {
   const list = project.exportList || [];
   rp.files = list.map((e) => ({
     path: e.path,
-    isImage: isImagePath(e.path),
+    sequence: e.sequence || null,
+    isImage: !e.sequence && isImagePath(e.path),
     probe: null,
     transform: Object.assign(Geometry.defaultTransform(), e.transform || {}),
     frameImg: null,
@@ -1941,7 +2394,7 @@ async function updateFileStates(list) {
   if (flipped.length) showFileStates(flipped);
   await Promise.all(toProbe.map(async (f) => {
     try {
-      f.probe = await api.previewProbe(f.path);
+      f.probe = await api.previewProbe(f.path, f.sequence);
     } catch (e) {
       f.probe = null;
     }
@@ -1965,7 +2418,7 @@ async function locateFile(f) {
   const paths = await api.openDialog({
     title: `Locate ${baseName(f.path)}`,
     filters: [
-      { name: 'Footage', extensions: [...IMAGE_EXTS, ...VIDEO_EXTS] },
+      { name: 'Footage', extensions: [...FOOTAGE_IMAGE_EXTS, ...VIDEO_EXTS] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
@@ -1996,12 +2449,13 @@ async function relinkFiles(f, chosen) {
   }
   await Promise.all(relinks.map(async ([file, p]) => {
     file.path = p;
-    file.isImage = isImagePath(p);
+    if (file.sequence) file.sequence = Conform.moveSequence(file.sequence, p);
+    file.isImage = !file.sequence && isImagePath(p);
     file.missing = false;
     file.frameImg = null;
     file.waveform = null;
     try {
-      file.probe = await api.previewProbe(p);
+      file.probe = await api.previewProbe(p, file.sequence);
     } catch (e) {
       file.probe = null;
     }
@@ -2203,7 +2657,7 @@ function refreshFileList() {
     const nm = document.createElement('span');
     nm.className = 'nm';
     nm.title = [f.path, f.probe && f.probe.width ? `${f.probe.width}×${f.probe.height}` : ''].filter(Boolean).join('\n');
-    const [headText, tailText] = ExportPlan.splitMiddle(baseName(f.path));
+    const [headText, tailText] = ExportPlan.splitMiddle(rowName(f));
     const head = document.createElement('span');
     head.className = 'head';
     head.textContent = headText;
@@ -2216,6 +2670,10 @@ function refreshFileList() {
     fillRowLength(sz, f);
     const stretched = footageStretch(f);
     row.append(cb, st, nm, sz);
+    if (f.sequence) {
+      row.classList.add('seq');
+      row.appendChild(sequenceRateLine(f));
+    }
     if (f.missing) {
       const missingTag = document.createElement('span');
       missingTag.className = 'tag missing-tag';
@@ -2250,11 +2708,64 @@ function refreshFileList() {
   $('rp-missing-line').classList.toggle('hidden', !missing);
   updateStartButton();
   refreshDestUI();
-  $('rp-clip-name').textContent = activeFile() ? baseName(activeFile().path) : 'no selection';
+  $('rp-clip-name').textContent = activeFile() ? rowName(activeFile()) : 'no selection';
   // keep the "image footage" settings row in sync with the list contents
   const anyImage = rp.files.some((f) => f.isImage);
   const def = currentCodec();
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
+}
+
+function rowName(f) {
+  return f.sequence ? `${f.sequence.label} (${f.sequence.count} frames)` : baseName(f.path);
+}
+
+function clipLabel(f) {
+  return f.sequence ? f.sequence.label : baseName(f.path);
+}
+
+function clipStem(f, pathInfo) {
+  return f.sequence ? f.sequence.stem : pathInfo.base;
+}
+
+// The frame rate of a numbered sequence is not in the files, so it is asked for here
+function sequenceRateLine(f) {
+  const line = document.createElement('div');
+  line.className = 'seq-line';
+  const text = document.createElement('span');
+  text.textContent = 'Frame rate';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'text';
+  input.className = 'num';
+  input.value = f.sequence.fps;
+  input.title = 'Frames per second of this sequence';
+  input.onclick = (e) => e.stopPropagation();
+  input.onchange = () => setSequenceRate(f, input.value);
+  input.onkeydown = (e) => { if (e.key === 'Enter') input.blur(); };
+  const unit = document.createElement('span');
+  unit.textContent = 'fps';
+  line.append(text, input, unit);
+  return line;
+}
+
+function setSequenceRate(f, value) {
+  const fps = calcNum(value);
+  if (!(fps > 0)) {
+    refreshFileList();
+    return;
+  }
+  f.sequence.fps = Math.min(240, fps);
+  if (f.probe) {
+    f.probe.fps = f.sequence.fps;
+    f.probe.durationSec = f.sequence.count / f.sequence.fps;
+  }
+  f.frameImg = null;
+  refreshFileList();
+  syncExportList();
+  refreshClipControls();
+  layoutTimeline();
+  fetchFrame(true);
+  refreshCodecUI();
 }
 
 // The table's length cell: the trimmed length, in orange when a trim is set
@@ -2265,11 +2776,12 @@ function fillRowLength(sz, f) {
     return;
   }
   const full = fileDuration(f);
-  if (!full) {
+  const trimmed = ExportPlan.isTrimmed(f.inSec, f.outSec);
+  // A sequence row carries its frame count in the name; the length only matters once trimmed
+  if (!full || (f.sequence && !trimmed)) {
     sz.textContent = '';
     return;
   }
-  const trimmed = ExportPlan.isTrimmed(f.inSec, f.outSec);
   sz.textContent = ExportPlan.formatClock(ExportPlan.trimmedSeconds(full, f.inSec, f.outSec));
   sz.classList.toggle('trimmed', trimmed);
   sz.title = trimmed ? `Trimmed from ${ExportPlan.formatClock(full)}: in ${ExportPlan.formatClock(f.inSec || 0)}, out ${ExportPlan.formatClock(f.outSec != null ? f.outSec : full)}` : '';
@@ -2428,13 +2940,17 @@ function updateStartButton() {
   $('r-missing-note').classList.toggle('hidden', !skipped);
 }
 
-async function addFootage(paths, opts) {
+// items: file paths, or {path, sequence} for a numbered image sequence
+async function addFootage(items, opts) {
   let firstNew = -1;
-  for (const p of paths) {
+  for (const item of items) {
+    const p = typeof item === 'string' ? item : item.path;
+    const sequence = typeof item === 'string' ? null : item.sequence;
     if (rp.files.some((f) => f.path === p)) continue;
     const f = {
       path: p,
-      isImage: isImagePath(p),
+      sequence,
+      isImage: !sequence && isImagePath(p),
       probe: null,
       transform: Geometry.defaultTransform(),
       frameImg: null,
@@ -2448,7 +2964,7 @@ async function addFootage(paths, opts) {
     if (firstNew < 0) firstNew = rp.files.length;
     rp.files.push(f);
     try {
-      f.probe = await api.previewProbe(p);
+      f.probe = await api.previewProbe(p, sequence);
     } catch (e) {
       f.probe = null;
     }
@@ -2460,6 +2976,18 @@ async function addFootage(paths, opts) {
     refreshFileList();
   }
   refreshCodecUI();
+}
+
+// Files, numbered frames and folders: numbered frames become one sequence clip
+async function addScanned(paths, opts) {
+  const scan = await api.scanFootage(paths, [...FOOTAGE_IMAGE_EXTS, ...VIDEO_EXTS], !!(opts && opts.anyFile));
+  const rate = outputRate() || 25;
+  const items = [
+    ...scan.sequences.map((s) => ({ path: s.first, sequence: { pattern: s.pattern, start: s.start, count: s.count, fps: rate, label: s.label, stem: s.stem } })),
+    ...scan.rest,
+  ];
+  if (items.length) await addFootage(items, opts);
+  if (scan.gaps) showToast(`Frame numbers have gaps: ${ExportPlan.plural(items.length, 'clip')} added`);
 }
 
 function selectFile(i) {
@@ -2505,6 +3033,7 @@ function layoutTimeline() {
   $('tl-sel').style.display = usable ? '' : 'none';
   $('tl-cur').textContent = fmtTC(usable ? f.curTime || 0 : 0);
   updatePlayBtn();
+  refreshCheckStale();
   if (usable) {
     const trimmed = (f.inSec != null || f.outSec != null);
     $('tl-len').textContent = trimmed
@@ -2624,7 +3153,7 @@ function fetchFrame(immediate) {
   frameTimer = setTimeout(async () => {
     const time = f.isImage ? 0 : f.curTime || 0;
     try {
-      const dataUrl = await api.previewFrame(f.path, time);
+      const dataUrl = await api.previewFrame(f.path, time, f.sequence);
       const img = new Image();
       img.onload = () => {
         f.frameImg = img;
@@ -2771,7 +3300,7 @@ async function startPlayback() {
       const end = f.outSec != null ? f.outSec : fileDuration(f);
       if (f.curTime >= end) f.curTime = f.inSec != null ? f.inSec : 0;
       try {
-        const dataUrl = await api.previewFrame(f.path, f.curTime);
+        const dataUrl = await api.previewFrame(f.path, f.curTime, f.sequence);
         if (!rp.playing) return;
         const img = new Image();
         img.onload = () => {
@@ -2839,7 +3368,8 @@ function refreshClipInfo() {
     if (pr.durationSec) parts.push(`${pr.durationSec.toFixed(2)} s`);
     if (pr.fps) parts.push(`${pr.fps} fps`);
     if (pr.bitrateKbps) parts.push(`${(pr.bitrateKbps / 1000).toFixed(1)} Mbps`);
-    parts.push(pr.hasAudio ? `audio ✓${pr.audioLayout ? ` (${pr.audioLayout})` : ''}` : 'no audio');
+    parts.push(pr.hasAudio ? `audio ✓${pr.audioLayout ? ` (${pr.audioLayout}${pr.audioBits >= 24 ? ', 24-bit' : ''})` : ''}` : 'no audio');
+    if (pr.timecode) parts.push(`TC ${pr.timecode}`);
     rows.push(parts.join(' · '));
   }
   el.innerHTML = rows.join('<br>');
@@ -2861,7 +3391,7 @@ function refreshPixelCheck() {
   const slices = Geometry.effectiveSlices(project);
   const alpha = $('r-alpha').value !== 'none' && def.alpha.includes($('r-alpha').value);
   const plan = Codecs.pixelPlan(slices, f.probe, { alpha, transform: f.transform });
-  const fps = f.isImage ? clampInt($('r-fps').value, 1, 240) : f.probe.fps || 25;
+  const fps = outputRate() || (f.isImage ? clampInt($('r-fps').value, 1, 240) : f.probe.fps || 25);
   $('px-rows').innerHTML = Codecs.pixelCheckRows(plan, def.id, fps, f.isImage)
     .map((r) => `<div class="px-row${r.ok ? '' : ' warn'}">${r.ok ? PX_CHECK_ICON : PX_WARN_ICON}<span class="k">${r.key}</span><span class="v">${r.value}</span></div>`)
     .join('');
@@ -3152,8 +3682,19 @@ function refreshCodecUI() {
   if (def.audioOnly) notes.push('Extracts the audio track as WAV — no video is rendered. Uses the in/out trim.');
   const af = activeFile();
   if (!def.audioOnly && !def.still && !def.sequence && af && af.probe && af.probe.hasAudio) {
-    notes.push(`Audio passthrough: ${af.probe.audioLayout || 'source'} (${af.probe.audioChannels || '?'} ch) as PCM${def.ext === 'mp4' ? '/AAC' : ''}.`);
+    if ($('r-alpha').value === 'only') notes.push('The audio is not kept in an alpha-only export.');
+    else notes.push(`Audio passthrough: ${af.probe.audioLayout || 'source'} (${af.probe.audioChannels || '?'} ch) as ${af.probe.audioBits >= 24 ? '24-bit ' : ''}PCM${def.ext === 'mp4' ? '/AAC' : ''}.`);
   }
+  if (def.sequence && af && af.probe && af.probe.hasAudio) notes.push('A PNG sequence cannot hold sound; the audio is not kept.');
+  if (def.sequence && af && af.probe && af.probe.timecode) notes.push(`Timecode ${af.probe.timecode} cannot be stored in a PNG sequence.`);
+  const rateChoice = outputRate();
+  if (!def.still && !def.audioOnly && rateChoice && af && !af.isImage && af.probe && af.probe.fps) {
+    const rateWarning = Codecs.rateNote(af.probe.fps, rateChoice);
+    if (rateWarning) notes.push(rateWarning);
+  }
+  $('r-rate-row').style.display = def.still || def.audioOnly ? 'none' : '';
+  $('r-fps').disabled = !!rateChoice;
+  $('r-fps').title = rateChoice ? 'Set by Output rate' : '';
   if (!def.audioOnly) notes.push(...autoPadNotes());
   $('r-codec-note').textContent = notes.join(' ');
   refreshTargets();
@@ -3165,6 +3706,13 @@ function refreshCodecUI() {
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
   updateStartButton();
   scheduleEstimate();
+  refreshCheckStale();
+}
+
+// The chosen output frame rate, or null for the source's own
+function outputRate() {
+  const v = $('r-rate').value;
+  return v === 'source' ? null : parseInt(v, 10);
 }
 
 function gpuActive() {
@@ -3294,6 +3842,8 @@ function captureExportSettings() {
     bitrate: $('r-bitrate').value,
     fps: clampInt($('r-fps').value, 1, 240),
     dur: clampInt($('r-dur').value, 1, 3600),
+    rate: $('r-rate').value,
+    panelGrid: rp.panelGrid,
     destDir: rp.destDir,
   };
 }
@@ -3331,6 +3881,9 @@ function applyProjectExportSettings() {
   if (s.bitrate !== undefined) $('r-bitrate').value = s.bitrate;
   if (s.fps) $('r-fps').value = String(s.fps);
   if (s.dur) $('r-dur').value = String(s.dur);
+  $('r-rate').value = s.rate || 'source';
+  rp.panelGrid = s.panelGrid || { on: false, w: 104, h: 104 };
+  refreshPanelGridUI();
   rp.destDir = s.destDir || null;
   rp.destProblem = null;
   rp.destFromProject = s.folderFromProject;
@@ -3429,7 +3982,7 @@ function refreshOutputName() {
     const t = targets[0];
     const fit = Codecs.fitOutputSize(def.id, t.width, t.height, gpuSizeOpt());
     const suffix = project.screens.length > 1 ? `_${sanitizeName(t.name)}` : '';
-    const stem = ExportPlan.outputStem(ExportPlan.stemOf(baseName(f.path)), def.id, alpha, fit.width, fit.height, suffix);
+    const stem = ExportPlan.outputStem(f.sequence ? f.sequence.stem : ExportPlan.stemOf(baseName(f.path)), def.id, alpha, fit.width, fit.height, suffix);
     name = def.sequence ? `${stem}_seq` : `${stem}.${def.ext}`;
   }
   const more = targets.length > 1 ? `, plus ${ExportPlan.plural(targets.length - 1, 'other')}` : '';
@@ -3516,9 +4069,10 @@ async function refreshEstimate() {
   const imageFps = clampInt($('r-fps').value, 1, 240);
   const depth = parseInt($('r-depth').value, 10);
   const seconds = (f) => (f.isImage ? imageDuration : ExportPlan.trimmedSeconds(fileDuration(f), f.inSec, f.outSec));
+  const chosenRate = outputRate();
   const clipPlan = clips.map((f) => {
     const s = seconds(f);
-    const frames = def.still && !def.sequence ? 1 : f.isImage ? s * imageFps : s * ((f.probe && f.probe.fps) || 25);
+    const frames = def.still && !def.sequence ? 1 : s * (chosenRate || (f.isImage ? imageFps : (f.probe && f.probe.fps) || 25));
     return { frames, audioBytes: ExportPlan.audioBytes(def, f.probe, f.isImage ? 0 : s, depth) };
   });
   const targets = def.audioOnly ? [{ width: 1, height: 1 }] : exportSizeTargets(rp.preflightMode).map((t) => ({ width: t.width, height: t.height }));
@@ -3539,12 +4093,13 @@ async function refreshEstimate() {
       try {
         perOutput = await api.estimateSample({
           project: { name: project.name, input: project.input, screens: project.screens, slices: project.slices },
-          job: { src: f.path, isImage: f.isImage, transform: f.transform, screen: { id: scr.id, name: scr.name, width: scr.width, height: scr.height } },
+          job: { src: f.path, isImage: f.isImage, sequence: f.sequence || null, transform: f.transform, screen: { id: scr.id, name: scr.name, width: scr.width, height: scr.height } },
           codec: def.id,
           alpha: $('r-alpha').value,
           depth,
           bitrateMbps: calcNum($('r-bitrate').value) || null,
           fps: imageFps,
+          outFps: chosenRate,
           imageDuration,
           gpu: gpuActive(),
           fastProres: fastProresActive(),
@@ -3746,6 +4301,8 @@ async function startRender(filesOverride, optsOverride) {
     $('rp-add').disabled = false;
     api.setTaskbarProgress(-1);
     processWatchQueue();
+    // The export stopped or refused the check; the tab would keep saying an export is running
+    if (ck.active && !ck.result) runFrameCheck();
   }
 }
 
@@ -3800,6 +4357,7 @@ async function runExport(filesOverride, optsOverride) {
       const pp = await api.pathParse(f.path);
       const dest = outputFolderFor(f);
       wavJobs.push({
+        sequence: null,
         src: f.path,
         isImage: false,
         outPath: await api.pathJoin(dest, `${pp.base}_audio_${depth}bit.wav`),
@@ -3870,7 +4428,7 @@ async function runExport(filesOverride, optsOverride) {
     for (const f of files) {
       const pp = await api.pathParse(f.path);
       const dest = outputFolderFor(f);
-      const stem = ExportPlan.outputStem(pp.base, codecId, alpha, OW, OH, tgt.suffix);
+      const stem = ExportPlan.outputStem(clipStem(f, pp), codecId, alpha, OW, OH, tgt.suffix);
       let outPath, outDir = null;
       if (def.sequence) {
         outDir = await api.pathJoin(dest, stem + '_seq');
@@ -3886,12 +4444,13 @@ async function runExport(filesOverride, optsOverride) {
         transform: f.transform,
         inSec: f.inSec,
         outSec: f.outSec,
+        sequence: f.sequence || null,
         pngTime: def.still && !def.sequence && !f.isImage ? f.frameTime || f.inSec || 0 : 0,
         screen: { id: tgt.screen.id, name: tgt.screen.name, width: tgt.screen.width, height: tgt.screen.height },
         allowPad: fit.rule.strict && rp.padAcceptedKey != null,
         maskFiles,
         project: projForJob || undefined,
-        label: targets.length > 1 || project.screens.length > 1 ? `${baseName(f.path)} → ${tgt.screen.name}` : baseName(f.path),
+        label: targets.length > 1 || project.screens.length > 1 ? `${clipLabel(f)} → ${tgt.screen.name}` : clipLabel(f),
       });
     }
   }
@@ -3915,6 +4474,7 @@ async function runExport(filesOverride, optsOverride) {
     depth,
     bitrateMbps,
     fps,
+    outFps: outputRate(),
     imageDuration,
     gpu,
     fastProres,
@@ -4038,6 +4598,10 @@ function addDoneRow(ev) {
 function onRenderEvent(ev) {
   const bar = $('r-bar'), plabel = $('r-plabel'), ppct = $('r-ppct'), log = $('r-log');
   if (!bar) return;
+  if (ev.type === 'player-test') {
+    showToast(`Building player test: ${Math.round(ev.percent)}%`);
+    return;
+  }
   const clock = rp.clock;
   const clips = new Set(rp.jobFiles).size;
   // The bar and the percentage both show the batch, weighted by clip length
@@ -5033,53 +5597,45 @@ function bindUI() {
     const xmls = paths.filter((p) => extOf(p) === 'xml');
     const csvs = paths.filter((p) => extOf(p) === 'csv');
     const projs = paths.filter((p) => ['xreproj', 'json'].includes(extOf(p)));
-    const imgs = paths.filter(isImagePath);
-    const vids = paths.filter((p) => VIDEO_EXTS.includes(extOf(p)));
     if (xmls.length) return importXmlPath(xmls[0]);
     if (csvs.length) return importCsvPath(csvs[0]);
     if (projs.length) return openProjectPath(projs[0]);
-    if (page === 'render' && (imgs.length || vids.length)) return addFootage([...imgs, ...vids]);
-    if (imgs.length && page === 'editor') return setReferenceFromPath(imgs[0]);
-    if (vids.length || imgs.length) {
-      switchPage('render');
-      return addFootage([...imgs, ...vids]);
-    }
+    const scan = await api.scanFootage(paths, [...FOOTAGE_IMAGE_EXTS, ...VIDEO_EXTS]);
+    if (!scan.sequences.length && !scan.rest.length) return;
+    const browserImage = scan.rest.find((p) => IMAGE_EXTS.includes(extOf(p)));
+    if (page === 'editor' && !scan.sequences.length && browserImage) return setReferenceFromPath(browserImage);
+    if (page !== 'render') switchPage('render');
+    return addScanned(paths);
   });
 
   // export page
-  $('rp-tab-input').onclick = () => {
-    rp.viewMode = 'input';
-    $('rp-tab-input').classList.add('active');
-    $('rp-tab-output').classList.remove('active');
-    refreshScreenSelectors();
-    fitRenderView();
-    drawRenderPreview();
-  };
-  $('rp-tab-output').onclick = () => {
-    rp.viewMode = 'output';
-    $('rp-tab-output').classList.add('active');
-    $('rp-tab-input').classList.remove('active');
-    refreshScreenSelectors();
-    fitRenderView();
-    drawRenderPreview();
-  };
+  $('rp-tab-input').onclick = () => setPreviewTab('input');
+  $('rp-tab-output').onclick = () => setPreviewTab('output');
+  $('rp-tab-check').onclick = () => setPreviewTab('check');
+  bindCheckView();
   $('rp-screen-select').onchange = () => {
     rp.screenId = $('rp-screen-select').value;
     fitRenderView();
     drawRenderPreview();
+    if (ck.active) runFrameCheck();
   };
+  $('r-rate').onchange = () => { refreshCodecUI(); exportSettingsChanged(); };
+  const gridFields = [$('tp-grid'), $('tp-grid-w'), $('tp-grid-h')];
+  gridFields.forEach((el) => {
+    el.onchange = () => setPanelGrid($('tp-grid').checked, $('tp-grid-w').value, $('tp-grid-h').value);
+  });
   $('rp-add').onclick = async () => {
     const paths = await api.openDialog({
       title: 'Choose stageview footage',
       multi: true,
       filters: [
-        { name: 'Footage', extensions: [...IMAGE_EXTS, ...VIDEO_EXTS] },
+        { name: 'Footage', extensions: [...FOOTAGE_IMAGE_EXTS, ...VIDEO_EXTS] },
         { name: 'All files', extensions: ['*'] },
       ],
     });
-    if (paths.length) addFootage(paths, { select: true });
+    if (paths.length) addScanned(paths, { select: true, anyFile: true });
   };
-  $('rp-testpattern').onclick = addTestPattern;
+  $('rp-testpattern').onclick = askTestPattern;
   $('rp-select-all').onclick = () => {
     const allSel = rp.files.every((f) => f.selected !== false);
     rp.files.forEach((f) => (f.selected = !allSel));
@@ -5327,20 +5883,15 @@ window.addEventListener('DOMContentLoaded', async () => {
         const f = activeFile();
         return JSON.stringify({ playing: rp.playing, t: f ? f.curTime : null, native: videoOkForPath === (f && f.path) });
       },
-      rpInput: () => {
-        rp.viewMode = 'input';
-        $('rp-tab-input').classList.add('active');
-        $('rp-tab-output').classList.remove('active');
-        fitRenderView();
-        drawRenderPreview();
-      },
-      rpOutput: () => {
-        rp.viewMode = 'output';
-        $('rp-tab-output').classList.add('active');
-        $('rp-tab-input').classList.remove('active');
-        fitRenderView();
-        drawRenderPreview();
-      },
+      rpInput: () => setPreviewTab('input'),
+      rpOutput: () => setPreviewTab('output'),
+      rpCheck: () => setPreviewTab('check'),
+      checkState: () => ({ result: ck.result, running: ck.running, seam: ck.seam, selected: ck.selected, message: ck.message }),
+      nextSeam: () => ckNextSeam(),
+      addScanned: (paths) => addScanned(paths, { select: true }),
+      addPlayerTest: () => addPlayerTest(),
+      setRate: (v) => { $('r-rate').value = v; refreshCodecUI(); },
+      setPanelGrid: (on, w, h) => setPanelGrid(on, w, h),
       setCodec: (id) => { $('r-codec').value = id; refreshCodecUI(); },
       openPanels: () => ['clip', 'color', 'advanced'].forEach((n) => setPanelOpen(n, true, true)),
       projectState: () => JSON.stringify({ files: rp.files.map((f) => ({ path: f.path, inSec: f.inSec, outSec: f.outSec, x: f.transform.x, missing: f.missing })), dirty: docDirty(), path: docFile.path, input: project.input, slices: project.slices.length, canUndo: history.undo.length, undoBytes: history.undo.reduce((n, e) => n + e.mapping.length + (e.footage || '').length, 0) }),

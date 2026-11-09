@@ -559,6 +559,39 @@ button.chk-chip.bad:hover { background: rgba(224, 85, 85, 0.28); }
 .split-summary { font-size: 12px; color: var(--accent-hi); margin: 10px 0 2px; }
 
 /* export page: view bar + timeline markers */
+#rp-canvas.ck-off { display: none; }
+#ck-wrap { flex: 1; display: flex; min-height: 0; }
+#ck-view { position: relative; flex: 1; min-width: 0; overflow: hidden; background: #16181a; cursor: grab; }
+#ck-view.grabbing { cursor: grabbing; }
+#ck-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+#ck-coords {
+  position: absolute; left: 14px;
+  background: rgba(8, 10, 12, 0.82); color: #fff;
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  padding: 3px 8px; border-radius: 3px; white-space: nowrap; pointer-events: none;
+}
+#ck-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 14px; padding: 24px; text-align: center; background: rgba(22, 24, 26, 0.72); pointer-events: none; }
+#ck-side { width: 232px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); min-height: 0; overflow-y: auto; }
+#ck-side .panel-title { padding: 10px 10px 6px; }
+#ck-side .note { padding: 8px 10px 0; margin: 0; line-height: 1.5; }
+#ck-side .ck-text { flex: 1; min-width: 0; }
+#ck-side .ck-text .nm { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ck-side .ck-text .sz { display: block; margin-top: 1px; }
+.ck-tag { border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.ck-tag.identical { background: rgba(76, 175, 80, 0.16); color: #86d98a; }
+.ck-tag.different { background: rgba(224, 85, 85, 0.18); color: #f08a8a; }
+.ck-tag.other { background: var(--panel2); color: var(--dim); font-weight: 400; }
+#ck-tools { display: flex; align-items: center; gap: 4px; }
+#ck-100.on { border-color: var(--accent); color: var(--accent); }
+#ck-stale { margin: 10px; padding: 8px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent-hi); font-size: 11px; display: flex; flex-direction: column; gap: 6px; }
+#ck-stale button { align-self: flex-start; }
+.file-row.seq { flex-wrap: wrap; row-gap: 3px; }
+.file-row .seq-line { flex-basis: 100%; display: flex; align-items: center; gap: 6px; padding-left: 41px; color: var(--dim); font-size: 11px; }
+.file-row .seq-line input { width: 52px; padding: 1px 5px; }
+.tp-kind { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.tp-kind label { display: flex; gap: 8px; align-items: flex-start; min-width: auto; }
+.tp-kind small { display: block; color: var(--dim); }
+
 #rp-viewbar {
   display: flex;
   align-items: center;

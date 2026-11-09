@@ -10,6 +10,7 @@ const Geometry = require('../shared/geometry');
 const Codecs = require('../shared/codecs');
 const { explainError, checkOutputDir } = require('./errors');
 const Outputs = require('../shared/outputs');
+const Conform = require('../shared/conform');
 const Files = require('./output-files');
 
 // Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg-<arch>).
@@ -207,7 +208,7 @@ function isFramePattern(p) {
 // Input option that makes ffmpeg read a file named like a frame pattern as that one file.
 // Only for the formats ffmpeg opens through image2 (gif has its own reader, without this option).
 function literalInputArgs(file) {
-  return /\.(png|jpe?g|tiff?|bmp|webp)$/i.test(file) && isFramePattern(file) ? ['-pattern_type', 'none'] : [];
+  return /\.(png|jpe?g|tiff?|bmp|webp|exr|dpx)$/i.test(file) && isFramePattern(file) ? ['-pattern_type', 'none'] : [];
 }
 
 // The colour matrix out of ffmpeg's "(tv, bt709/unknown/unknown, progressive)" text, or null.
@@ -268,8 +269,28 @@ function probeMedia(ffPath, file) {
         : { mono: 1, stereo: 2, quad: 4, '5.1': 6, '7.1': 8 }[am[1].toLowerCase()] || null;
       out.audioLayout = am[1];
     }
+    out.audioBits = audioBitsOf(aline);
   }
+  const tc = err.match(/^\s*timecode\s*:\s*(\d{2}:\d{2}:\d{2}[:;.]\d{2})/im);
+  if (tc) out.timecode = tc[1];
   return out;
+}
+
+// Bits per sample of a losslessly stored audio stream, or null for the lossy codecs.
+// "Audio: pcm_s24le (in24 ...), 48000 Hz, stereo, s32" or "Audio: flac, ... s32 (24 bit)"
+function audioBitsOf(line) {
+  const raw = line.match(/\((\d+) bit\)/);
+  if (raw) return parseInt(raw[1], 10);
+  const pcm = line.match(/Audio:\s*pcm_[suf](\d+)/);
+  return pcm ? parseInt(pcm[1], 10) : null;
+}
+
+// probeMedia for a clip, including an image sequence: the first frame tells the picture,
+// the frame count and rate tell the time.
+function probeSource(ffPath, src, sequence) {
+  const probe = probeMedia(ffPath, src);
+  if (!sequence) return probe;
+  return { ...probe, durationSec: sequence.count / sequence.fps, fps: sequence.fps, hasAudio: false, timecode: undefined };
 }
 
 // Mono peak waveform for the trim timeline (max-abs per bucket, 0..1)
@@ -301,10 +322,14 @@ function extractWaveform(src, buckets) {
 }
 
 // Extract a single frame as PNG buffer (for the export page live preview).
-function extractFrame(src, timeSec) {
+function extractFrame(src, timeSec, sequence) {
   const caps = getCapabilities();
   const ffPath = caps.proresPath;
   if (!ffPath) throw new Error('ffmpeg not found');
+  if (sequence) {
+    src = Conform.frameFile(sequence, Conform.frameAtTime(sequence, timeSec));
+    timeSec = 0;
+  }
   const seek = timeSec > 0 ? ['-ss', String(timeSec)] : [];
   const args = [
     '-hide_banner', '-loglevel', 'error',
@@ -442,12 +467,18 @@ function buildArgs(project, job, opts, probe) {
   const isSeq = !!codecDef.sequence;
   const alpha = opts.alpha && codecDef.alpha.includes(opts.alpha) ? opts.alpha : 'none';
   const useAlphaPipeline = alpha !== 'none';
-  const fps = job.isImage || isStill ? opts.fps || 50 : (probe && probe.fps) || 25;
+  // A chosen output rate wins over the source's; the base and fps filters conform to it
+  const outFps = opts.outFps > 0 ? opts.outFps : null;
+  const sourceFps = (probe && probe.fps) || 25;
+  const fps = job.isImage || isStill ? outFps || opts.fps || 50 : outFps || sourceFps;
+  const seq = job.sequence || null;
   const dur = job.isImage && !isStill ? opts.imageDuration || 1 : null;
 
   // trim (videos only)
   const inSec = !job.isImage && job.inSec > 0 ? job.inSec : 0;
   const outSec = !job.isImage && job.outSec > inSec ? job.outSec : null;
+  // A sequence starts at a frame number, so a trim there is exact and needs no seek
+  const seekSec = seq ? 0 : inSec;
 
   const tr = job.transform;
   // The whole graph stays in the source's format; see Codecs.pixelPlan
@@ -465,11 +496,16 @@ function buildArgs(project, job, opts, probe) {
   // Stills grab frame #1, and a trim starts at the frame after the in-point: after an input
   // seek (-ss) the first video frame starts slightly after t=0 while the color base starts
   // at 0 — reset pts so they line up, otherwise the first frame is the bare black base.
-  const ptsReset = (isStill && !isSeq) || inSec > 0 ? ['setpts=PTS-STARTPTS'] : [];
+  const ptsReset = (isStill && !isSeq) || seekSec > 0 ? ['setpts=PTS-STARTPTS'] : [];
 
   // An untagged YUV source is taken as BT.709. Without this the BT.709 encoder tags make
   // ffmpeg convert it as if it were BT.601, which shifts every colour.
   const srcFmt = plan.source;
+  // When the rate changes, the last source frame gets its full time on the output too;
+  // the frame count at the end of the command line then cuts the clone off exactly.
+  const conforming = !!(outFps && !job.isImage && !isStill && probe && probe.fps && Codecs.rateRelation(probe.fps, outFps).kind !== 'same');
+  const conformPad = conforming ? [`tpad=stop_mode=clone:stop_duration=${(1 / probe.fps).toFixed(6)}`] : [];
+
   const tagSource = srcFmt && srcFmt.family === 'yuv' && !(probe && probe.colorspace)
     ? ['setparams=colorspace=bt709']
     : [];
@@ -478,7 +514,7 @@ function buildArgs(project, job, opts, probe) {
     const lay = Geometry.clipLayout(probe.width, probe.height, tr, IW, IH);
     const bw = Math.max(2, Math.round(lay.bw));
     const bh = Math.max(2, Math.round(lay.bh));
-    const chain = [...tagSource, ...ptsReset, `scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
+    const chain = [...tagSource, ...ptsReset, ...conformPad, `scale=${bw}:${bh}:flags=bicubic`, 'setsar=1'];
     if (useAlphaPipeline) chain.push(`format=${plan.srcPix}`);
     if (tr.rotation) {
       chain.push(
@@ -492,7 +528,7 @@ function buildArgs(project, job, opts, probe) {
   } else {
     // format= fixes the shared part of the graph: without it, the 4:4:4 step of one odd
     // slice would be negotiated upstream and change every even slice too
-    const chain = [...tagSource, ...ptsReset, `scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr), `format=${plan.srcPix}`];
+    const chain = [...tagSource, ...ptsReset, ...conformPad, `scale=${IW}:${IH}:flags=bicubic`, 'setsar=1', ...adjustOps(tr), `format=${plan.srcPix}`];
     parts.push(`[0:v]${chain.join(',')}[src]`);
   }
 
@@ -551,14 +587,23 @@ function buildArgs(project, job, opts, probe) {
     if (alpha === 'only') parts.push('[pre]alphaextract[out]');
   }
 
+  // For the frame check of chroma-subsampled sources: only the brightness plane of the output
+  if (opts.lumaCheck) {
+    parts[parts.length - 1] = parts[parts.length - 1].replace(/\[out\]$/, '[lumaSrc]');
+    parts.push('[lumaSrc]extractplanes=y[out]');
+  }
+
   // input args
   let inputArgs;
-  if (job.isImage && !isStill) {
+  if (seq) {
+    const first = Conform.frameAtTime(seq, isStill && !isSeq ? job.pngTime : inSec);
+    inputArgs = ['-f', 'image2', '-pattern_type', 'sequence', '-framerate', Codecs.exactRate(seq.fps), '-start_number', String(first), '-i', seq.pattern];
+  } else if (job.isImage && !isStill) {
     inputArgs = ['-loop', '1', '-t', String(dur), ...literalInputArgs(job.src), '-i', job.src];
   } else if (isStill && !isSeq && !job.isImage && job.pngTime > 0) {
     inputArgs = ['-ss', String(job.pngTime), '-i', job.src];
-  } else if (!job.isImage && inSec > 0) {
-    inputArgs = ['-ss', String(inSec), '-i', job.src];
+  } else if (!job.isImage && seekSec > 0) {
+    inputArgs = ['-ss', String(seekSec), '-i', job.src];
   } else {
     inputArgs = [...literalInputArgs(job.src), '-i', job.src];
   }
@@ -572,13 +617,31 @@ function buildArgs(project, job, opts, probe) {
     : Codecs.encoderArgs(opts.codec, encOpts);
 
   // never on a PNG sequence: the image muxer would write the audio packets as fake .png files
-  const wantAudio =
-    !isStill && !isSeq && !job.isImage && probe && probe.hasAudio && !useAlphaPipeline;
+  const canHoldAudio = !isStill && !isSeq && !job.isImage && alpha !== 'only';
+  const wantAudio = canHoldAudio && probe && probe.hasAudio;
+  const keeps24Bit = !!(probe && probe.audioBits >= 24);
   const audioArgs = wantAudio
     ? codecDef.ext === 'mp4'
       ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '320k']
-      : ['-map', '0:a:0', '-c:a', 'pcm_s16le']
+      : ['-map', '0:a:0', '-c:a', keeps24Bit ? 'pcm_s24le' : 'pcm_s16le']
     : [];
+
+  // What the owner would otherwise only find out at the venue: reported as a note on the job
+  const notes = [];
+  if (probe && probe.hasAudio && !wantAudio && !isStill) {
+    notes.push(alpha === 'only' ? 'Audio is not kept in an alpha-only export.' : 'Audio is not kept: a PNG sequence cannot hold sound.');
+  }
+  if (wantAudio && keeps24Bit && codecDef.ext === 'mp4') notes.push(`${probe.audioBits}-bit audio is converted to AAC in MP4.`);
+  if (outFps && !job.isImage && !isStill && probe && probe.fps) {
+    const rateWarning = Codecs.rateNote(probe.fps, outFps);
+    if (rateWarning) notes.push(rateWarning);
+  }
+
+  // Timecode of the source, moved on by the in-point, on the first frame of the output
+  const sourceTc = !job.isImage && !seq && probe ? probe.timecode : null;
+  const canHoldTc = !isStill && !isSeq;
+  const outTimecode = sourceTc && canHoldTc ? Conform.outputTimecode(sourceTc, sourceFps, fps, inSec) : null;
+  if (sourceTc && !isStill && !canHoldTc) notes.push(`Timecode ${sourceTc} is not kept: a PNG sequence has no timecode track.`);
 
   const trimOut = [];
   if (!job.isImage && !isStill && outSec) trimOut.push('-t', String(outSec - inSec));
@@ -588,22 +651,6 @@ function buildArgs(project, job, opts, probe) {
     ? path.join(path.dirname(job.outPath).replace(/%/g, '%%'), path.basename(job.outPath))
     : job.outPath;
 
-  const args = [
-    '-y',
-    '-hide_banner',
-    ...inputArgs,
-    '-filter_complex', parts.join(';'),
-    '-map', '[out]',
-    ...audioArgs,
-    ...codecArgs,
-    ...(job.isImage && !isStill ? ['-r', String(fps)] : []),
-    ...(isSeq && !job.isImage ? ['-fps_mode', 'passthrough'] : []),
-    ...trimOut,
-    ...OUT_META,
-    '-progress', 'pipe:1',
-    '-nostats',
-    outTarget,
-  ];
   const totalDur = isStill && !isSeq
     ? null
     : job.isImage
@@ -617,18 +664,40 @@ function buildArgs(project, job, opts, probe) {
   const remaining = !job.isImage && probe && probe.durationSec ? probe.durationSec - inSec : null;
   const expectSec = totalDur != null && remaining != null ? Math.min(totalDur, remaining) : totalDur;
   const fpsKnown = job.isImage || (probe && probe.fps);
+  const expectFrames = expectSec != null && fpsKnown ? Math.round(expectSec * fps) : null;
+
+  const args = [
+    '-y',
+    '-hide_banner',
+    ...inputArgs,
+    '-filter_complex', parts.join(';'),
+    '-map', '[out]',
+    ...audioArgs,
+    ...codecArgs,
+    ...(job.isImage && !isStill ? ['-r', String(fps)] : []),
+    ...(isSeq && !job.isImage ? ['-fps_mode', 'passthrough'] : []),
+    ...trimOut,
+    ...(conforming && expectFrames != null ? ['-frames:v', String(expectFrames)] : []),
+    ...(outTimecode ? ['-timecode', outTimecode] : []),
+    ...OUT_META,
+    '-progress', 'pipe:1',
+    '-nostats',
+    outTarget,
+  ];
   const expect = {
     kind: isSeq ? 'sequence' : isStill ? 'still' : 'video',
     width: OW,
     height: OH,
     codec: Outputs.probedCodec(opts.codec),
-    frames: expectSec != null && fpsKnown ? Math.round(expectSec * fps) : null,
-    hasAudio: !!(probe && probe.hasAudio),
+    frames: expectFrames,
+    hasAudio: !!wantAudio,
+    timecode: outTimecode,
   };
-  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null, expect, composite };
+  return { args, durationSec: totalDur, paddedTo: fit.padded ? `${OW}×${OH}` : null, expect, composite, notes };
 }
 
-function runFfmpeg(ffPath, args, durationSec, onProgress) {
+function runFfmpeg(ffPath, args, durationSec, onProgress, options) {
+  const outsideBatch = !!(options && options.outsideBatch);
   return new Promise((resolve, reject) => {
     const proc = spawn(ffPath, args);
     activeProcs.add(proc);
@@ -657,7 +726,8 @@ function runFfmpeg(ffPath, args, durationSec, onProgress) {
     });
     proc.on('close', (code) => {
       activeProcs.delete(proc);
-      if (cancelled) return reject(new Error('Cancelled'));
+      // The cancel flag belongs to the batch; a job outside it is only cancelled by being killed
+      if (outsideBatch ? code === null : cancelled) return reject(new Error('Cancelled'));
       if (code === 0) return resolve();
       const err = new Error(`ffmpeg error (code ${code}):\n${stderrTail}`);
       err.ffmpegArgs = args;
@@ -721,7 +791,7 @@ async function verifyOutput(ffPath, file, expect) {
     if (!probe.videoCodec) return { problem: 'The exported file cannot be read back.' };
     if (frames === 0) return { problem: 'The export wrote no frames.' };
   }
-  const actual = { width: probe.width, height: probe.height, codec: probe.videoCodec, frames, durationSec: probe.durationSec };
+  const actual = { width: probe.width, height: probe.height, codec: probe.videoCodec, frames, durationSec: probe.durationSec, timecode: probe.timecode };
   return {
     kind: expect.kind,
     width: probe.width,
@@ -750,8 +820,9 @@ const whenIdle = () => (batchActive ? new Promise((done) => idleWaiters.push(don
 
 async function runBatch(win, payload) {
   cancelled = false;
-  const { jobs, codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu } = payload;
+  const { jobs, codec, alpha, depth, bitrateMbps, fps, imageDuration, gpu, outFps } = payload;
   const ffPath = ffmpegForCodec(codec);
+  stopFrameCheck(); // an export gets the whole machine
   if (!ffPath) throw new Error('No ffmpeg found for this codec');
 
   // Only an encoder that passed its test on this machine; otherwise the processor does it.
@@ -795,9 +866,9 @@ async function runBatch(win, payload) {
       const workJob = isDir
         ? { ...job, outDir: partial, outPath: path.join(partial, path.basename(job.outPath)) }
         : { ...job, outPath: partial };
-      const probe = probeMedia(ffPath, job.src);
+      const probe = probeSource(ffPath, job.src, job.sequence);
       const opts = {
-        codec, alpha, depth, bitrateMbps, fps, imageDuration, fastProres,
+        codec, alpha, depth, bitrateMbps, fps, outFps, imageDuration, fastProres,
         gpu: !!gpuChoice,
         gpuFamily: gpuChoice ? gpuChoice.family : null,
         gpuEncoder: gpuChoice ? gpuChoice.id : null,
@@ -808,6 +879,7 @@ async function runBatch(win, payload) {
         const built = buildArgs(project, workJob, opts, probe);
         paddedTo = built.paddedTo;
         expect = built.expect;
+        for (const note of built.notes) send(win, { type: 'job-note', index: i, total: jobs.length, note: `${job.label ? job.label + ': ' : ''}${note}`, label: job.label });
         await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
       } catch (gpuErr) {
         // Back to the processor only when the graphics card encoder itself failed
@@ -876,7 +948,7 @@ async function sampleOutputSize(input) {
   if (!def || def.audioOnly) return null;
   const ffPath = ffmpegForCodec(input.codec);
   if (!ffPath) return null;
-  const probe = probeMedia(ffPath, input.job.src);
+  const probe = probeSource(ffPath, input.job.src, input.job.sequence);
   // A sequence is measured as one PNG; ten of them would give the same bytes per frame
   const codec = def.sequence ? 'png' : input.codec;
   const maxFrames = codec === 'png' ? 1 : 10;
@@ -889,6 +961,7 @@ async function sampleOutputSize(input) {
     depth: input.depth,
     bitrateMbps: input.bitrateMbps,
     fps: input.fps,
+    outFps: input.outFps,
     imageDuration: input.imageDuration,
     fastProres: !!input.fastProres && !gpuChoice,
     gpu: !!gpuChoice,
@@ -927,6 +1000,207 @@ async function sampleOutputSize(input) {
   });
 }
 
+// ---------------- frame check ----------------
+let checkRun = 0;
+let checkProc = null;
+
+function stopFrameCheck() {
+  checkRun++;
+  if (checkProc) {
+    try { checkProc.kill('SIGKILL'); } catch (e) { /* already stopped */ }
+  }
+}
+
+// Runs ffmpeg for the frame check; stdout is collected when asked for (raw frames)
+function runCheckStep(ffPath, args, wantStdout) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffPath, args);
+    checkProc = proc;
+    const chunks = [];
+    let stderr = '';
+    proc.stdout.on('data', (d) => { if (wantStdout) chunks.push(d); });
+    proc.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-2000); });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (checkProc === proc) checkProc = null;
+      if (code === 0) resolve(wantStdout ? Buffer.concat(chunks) : null);
+      else reject(new Error(`ffmpeg error (code ${code}):\n${stderr}`));
+    });
+  });
+}
+
+async function readRgba(ffPath, file, width, height) {
+  const raw = await runCheckStep(ffPath, ['-hide_banner', '-loglevel', 'error', '-i', file, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], true);
+  if (raw.length !== width * height * 4) throw new Error('The check frame has an unexpected size.');
+  return raw;
+}
+
+// Differences at or below this are the rounding of the colour conversion, not the mapping
+const CHECK_TOLERANCE = 1;
+
+// A playhead on the end of a video is past its last frame, where a seek finds nothing. Sequences
+// clamp themselves. The extra 10 ms covers the container duration, which is rounded to 1/100 s.
+function checkTime(atSec, job, probe) {
+  if (job.isImage || job.sequence || !probe.durationSec) return atSec;
+  return Math.min(atSec, Math.max(0, probe.durationSec - 1 / (probe.fps || 25) - 0.01));
+}
+
+// Renders the current frame through the real export graph and compares every slice back with
+// the input canvas (the same frame through the graph with one full-canvas slice).
+async function checkFrame(input) {
+  if (batchActive) return { busy: true };
+  stopFrameCheck();
+  const run = ++checkRun;
+  try {
+    return await compareFrame(input, run);
+  } catch (e) {
+    // A newer check or an export stopped this one on purpose: its ffmpeg was killed
+    if (run !== checkRun) return { stale: true };
+    throw e;
+  }
+}
+
+async function compareFrame(input, run) {
+  const def = Codecs.byId(input.codec);
+  if (!def || def.audioOnly) throw new Error('This format has no picture to check.');
+  const ffPath = ffmpegForCodec(def.id);
+  if (!ffPath) throw new Error('No ffmpeg found for this codec');
+  const dir = path.join(os.tmpdir(), `xre-check-${process.pid}`);
+  // A check that was just stopped can still hold its file on Windows; the names below are new
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* cleared next time */ }
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = `${Date.now()}`;
+  const mapFile = path.join(dir, `map-${stamp}.png`);
+  const refFile = path.join(dir, `ref-${stamp}.png`);
+
+  const probe = probeSource(ffPath, input.job.src, input.job.sequence);
+  const atSec = checkTime(input.atSec || 0, input.job, probe);
+  // The colour of a chroma-subsampled source is shared between neighbouring pixels, and the
+  // two paths resample it differently; only the brightness plane can be held to one pixel.
+  const sourceFormat = Codecs.parsePixFmt(probe.pixFmt);
+  const lumaOnly = !!(sourceFormat && sourceFormat.family === 'yuv' && (sourceFormat.hsub || sourceFormat.vsub) && input.alpha === 'none');
+  const pngOpts = { codec: 'png', alpha: input.alpha, depth: 8, fps: input.fps, imageDuration: input.imageDuration, lumaCheck: lumaOnly };
+  const baseJob = { ...input.job, outDir: null, allowPad: true, inSec: 0, outSec: null, pngTime: atSec };
+
+  const mapJob = { ...baseJob, outPath: mapFile };
+  const built = buildArgs(input.project, mapJob, pngOpts, probe);
+  await runCheckStep(ffPath, built.args);
+  if (run !== checkRun) return { stale: true };
+  // ffmpeg ends cleanly when it finds no frame there, for example where only audio is left
+  if (!fs.existsSync(mapFile)) throw new Error('The video has no frame at the playhead. Move the playhead back a little.');
+
+  const OW = built.expect.width;
+  const OH = built.expect.height;
+  const IW = Math.max(1, Math.round(input.project.input.width));
+  const IH = Math.max(1, Math.round(input.project.input.height));
+  const refScreen = { id: 'check-ref', name: 'ref', width: IW, height: IH };
+  const full = { x: 0, y: 0, w: IW, h: IH };
+  const refProject = { name: 'ref', input: input.project.input, screens: [refScreen], slices: [{ id: 'check-ref', enabled: true, screenId: refScreen.id, in: full, out: full, inOrient: 0, outOrient: 0, flip: 0 }] };
+  await runCheckStep(ffPath, buildArgs(refProject, { ...baseJob, screen: refScreen, maskFiles: null, outPath: refFile }, pngOpts, probe).args);
+  if (run !== checkRun) return { stale: true };
+
+  const out = await readRgba(ffPath, mapFile, OW, OH);
+  if (run !== checkRun) return { stale: true };
+  const ref = await readRgba(ffPath, refFile, IW, IH);
+  if (run !== checkRun) return { stale: true };
+
+  const slices = Geometry.effectiveSlices(input.project, input.job.screen ? input.job.screen.id : undefined);
+  const rows = slices.map((eff, i) => {
+    const row = { id: eff.slice.id, name: eff.slice.name, crop: eff.crop, place: eff.place, label: Conform.coordsLabel(eff) };
+    if (input.alpha === 'only') return { ...row, state: 'skipped' };
+    if (Conform.isScaled(eff)) return { ...row, state: 'scaled' };
+    if (eff.polyMask) return { ...row, state: 'masked' };
+    const covers = slices.slice(i + 1).map((s) => s.place);
+    const r = Conform.compareSlice(out, OW, OH, ref, IW, IH, eff, covers, { tolerance: CHECK_TOLERANCE });
+    // No pixel of this slice reaches the output: nothing was checked, so no verdict either
+    const state = !r.compared ? 'covered' : r.different ? 'different' : 'identical';
+    return { ...row, state, different: r.different, compared: r.compared };
+  });
+
+  // The picture is the frame after the chosen encoder; the comparison above stays lossless,
+  // otherwise every lossy codec would read as a broken mapping
+  let image = mapFile;
+  let codecProblem = null;
+  const lossy = def.id !== 'png' && !def.sequence;
+  if (lossy || lumaOnly) {
+    const viewCodec = lossy ? def.id : 'png';
+    const encoded = path.join(dir, `enc-${stamp}.${Codecs.byId(viewCodec).ext}`);
+    const decoded = path.join(dir, `view-${stamp}.png`);
+    try {
+      const gpuChoice = input.gpu ? Codecs.gpuFor(await detectGpu(), def.id, input.depth) : null;
+      const opts = {
+        codec: viewCodec, alpha: input.alpha, depth: lossy ? input.depth : 8, bitrateMbps: input.bitrateMbps,
+        fps: input.fps, outFps: input.outFps, imageDuration: input.imageDuration,
+        fastProres: !!input.fastProres && !gpuChoice,
+        gpu: !!gpuChoice, gpuFamily: gpuChoice ? gpuChoice.family : null, gpuEncoder: gpuChoice ? gpuChoice.id : null,
+      };
+      const b = buildArgs(input.project, { ...input.job, outDir: null, allowPad: true, inSec: atSec, outSec: null, pngTime: atSec, outPath: encoded }, opts, probe);
+      const args = b.args.slice();
+      args.splice(args.indexOf('-progress'), 0, '-frames:v', '1', '-an');
+      await runCheckStep(ffPath, args);
+      if (run !== checkRun) return { stale: true };
+      await runCheckStep(ffPath, ['-hide_banner', '-loglevel', 'error', '-y', '-i', encoded, '-frames:v', '1', '-c:v', 'png', decoded]);
+      image = decoded;
+    } catch (e) {
+      codecProblem = `The picture could not be rendered through ${def.label} here.`;
+    }
+  }
+  if (run !== checkRun) return { stale: true };
+  return {
+    image,
+    width: OW,
+    height: OH,
+    rows,
+    seams: Conform.seams(slices.map((s) => s.place), OW, OH),
+    lossy: lossy && !codecProblem,
+    lumaOnly,
+    codecLabel: def.label,
+    codecProblem,
+    tolerance: CHECK_TOLERANCE,
+  };
+}
+
+// ---------------- player test ----------------
+// A clip at canvas size with a moving one-pixel bar and a frame counter in every slice.
+// Lossless, because it is a source: the chosen export codec is what gets tested.
+function makePlayerTest(win, input) {
+  const ffPath = getCapabilities().proresPath;
+  if (!ffPath) throw new Error('ffmpeg not found');
+  const seconds = Conform.PLAYER_TEST_SECONDS;
+  const width = Math.max(2, Math.round(input.width));
+  const height = Math.max(2, Math.round(input.height));
+  const fps = input.fps;
+  const rate = Codecs.exactRate(fps);
+  const outPath = path.join(os.tmpdir(), `player-test-${input.name}-${width}x${height}-${String(fps).replace('.', '_')}fps.mkv`);
+  const graph = Conform.playerTestGraph(width, height, rate, fps, seconds, Conform.counterPlaces(input.slices));
+  const args = ['-y', '-hide_banner', '-filter_complex', graph, '-map', '[out]', '-c:v', 'ffv1', '-level', '3', '-g', '1', '-slices', '4', '-pix_fmt', 'yuv444p', '-progress', 'pipe:1', '-nostats', outPath];
+  const onPct = (percent) => send(win, { type: 'player-test', percent });
+  return runFfmpeg(ffPath, args, seconds, onPct, { outsideBatch: true }).then(() => outPath);
+}
+
+// Expands dropped folders (one level) and groups numbered frames into clips. Only media files
+// count, unless keepOtherFiles: a file picked by hand under 'All files' is the user's call.
+function scanFootage(paths, mediaExts, keepOtherFiles) {
+  const known = new Set(mediaExts);
+  const files = [];
+  for (const p of paths) {
+    let stat;
+    try {
+      stat = fs.statSync(p);
+    } catch (e) {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      if (keepOtherFiles || known.has(path.extname(p).slice(1).toLowerCase())) files.push(p);
+      continue;
+    }
+    for (const name of fs.readdirSync(p).sort()) {
+      if (known.has(path.extname(name).slice(1).toLowerCase())) files.push(path.join(p, name));
+    }
+  }
+  return Conform.detectSequences(files);
+}
+
 function cancel() {
   if (sampleProc) {
     try { sampleProc.kill('SIGKILL'); } catch (e) { /* already stopped */ }
@@ -948,7 +1222,12 @@ module.exports = {
   setGpuDetection,
   ffmpegForCodec,
   probeMedia,
+  probeSource,
   extractFrame,
+  checkFrame,
+  stopFrameCheck,
+  makePlayerTest,
+  scanFootage,
   extractWaveform,
   effectiveSlices,
   buildArgs,
