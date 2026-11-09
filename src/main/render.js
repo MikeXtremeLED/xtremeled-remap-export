@@ -599,6 +599,13 @@ function buildArgs(project, job, opts, probe) {
     parts.push('[lumaSrc]extractplanes=y[out]');
   }
 
+  // The encoder options alone only write the matrix; the primaries and transfer have to be on
+  // the frames. Tags only: this changes no pixel.
+  if (Codecs.writesBt709(opts.codec) && alpha !== 'only' && !opts.lumaCheck) {
+    parts[parts.length - 1] = parts[parts.length - 1].replace(/\[out\]$/, '[untagged]');
+    parts.push('[untagged]setparams=color_primaries=bt709:color_trc=bt709[out]');
+  }
+
   // input args
   let inputArgs;
   if (seq) {

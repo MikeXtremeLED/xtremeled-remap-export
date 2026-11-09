@@ -259,9 +259,19 @@ async function run(ok, ff, tmp) {
         const px = rawFrame(ff, out, 'rgb24');
         assert(px[0] >= 250 && px[1] <= 8 && px[2] <= 8, `${codec}: red decodes as ${px[0]},${px[1]},${px[2]}`);
         const info = spawnSync(ff, ['-hide_banner', '-i', out], { encoding: 'utf8' }).stderr;
-        assert(/bt709/.test(info), `${codec}: output says BT.709`);
+        const video = (info.match(/Video:.*/) || [''])[0];
+        assert(/bt709, progressive|\bbt709\b(?!\/unknown)/.test(video) && !/unknown/.test(video), `${codec}: output carries full BT.709 tags: ${video}`);
       }
       ok('RGB source: H.264, HEVC and ProRes 4444 decode to pure red and carry BT.709');
+
+      const vt = (codec, depth) => Codecs.encoderArgs(codec, { gpu: true, gpuFamily: 'videotoolbox', depth });
+      const pixOf = (args) => args[args.indexOf('-pix_fmt') + 1];
+      assert.strictEqual(pixOf(vt('hevc', 8)), 'yuv420p', 'HEVC VideoToolbox at 8-bit stays 8-bit');
+      assert.strictEqual(pixOf(vt('hevc', 10)), 'p010le', 'HEVC VideoToolbox at 10-bit');
+      assert.strictEqual(pixOf(vt('h264', 8)), 'yuv420p', 'H.264 VideoToolbox stays 8-bit');
+      const odd12 = Codecs.pixelPlan([{ crop: { x: 0, y: 0, w: 64, h: 16 }, place: { x: 1, y: 0, w: 64, h: 16 } }], { pixFmt: 'yuv422p12le' }, {});
+      assert(odd12.limited && /12-bit/.test(odd12.reason), `a depth limit stays in the card text: ${odd12.reason}`);
+      ok('VideoToolbox keeps the chosen depth; the card names the real limit');
 
       // An untagged YUV source must keep its values; only the tag is added
       const yuv = pixFile('untagged.mkv');

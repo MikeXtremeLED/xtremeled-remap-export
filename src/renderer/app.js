@@ -2153,7 +2153,7 @@ function askExisting(names, canSkip) {
           <button id="m-cancel">Cancel</button>
           ${canSkip ? '<button id="m-skip">Skip these</button>' : ''}
           <button id="m-overwrite">Overwrite</button>
-          <button id="m-version" class="accent">New version (_v2)</button>
+          <button id="m-version" class="accent">Save as new version</button>
         </div>
       </div>
     `);

@@ -668,6 +668,7 @@ button.chk-chip.bad:hover { background: rgba(224, 85, 85, 0.28); }
 #tl-track {
   position: relative;
   flex: 1;
+  min-width: 0;
   height: 30px;
   background: #16181a;
   border: 1px solid var(--border);

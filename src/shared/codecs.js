@@ -162,11 +162,13 @@
             : ['-c:v', 'prores_videotoolbox', '-profile:v', '4444', ...BT709_TAGS];
         case 'hevc': {
           const args = ['-c:v', 'hevc_videotoolbox', '-b:v', `${opt.bitrateMbps || 25}M`, '-tag:v', 'hvc1'];
+          // The graph stays in the source format, so the Depth setting has to be pinned here
           if ((opt.depth || 8) >= 10) args.push('-profile:v', 'main10', '-pix_fmt', 'p010le');
+          else args.push('-pix_fmt', 'yuv420p');
           return [...args, ...BT709_TAGS];
         }
         case 'h264':
-          return ['-c:v', 'h264_videotoolbox', '-b:v', `${opt.bitrateMbps || 20}M`, ...BT709_TAGS];
+          return ['-c:v', 'h264_videotoolbox', '-b:v', `${opt.bitrateMbps || 20}M`, '-pix_fmt', 'yuv420p', ...BT709_TAGS];
       }
     }
     switch (codecId) {
@@ -395,7 +397,7 @@
     // chroma lands one pixel off. The encoder still subsamples correctly afterwards.
     if (src && src.family === 'yuv' && key !== '444-8' && key !== '444-10' && slices.some((s) => placedOdd(WORK_FORMATS[key], s))) {
       key = `444-${src.depth > 8 ? '10' : '8'}`;
-      reason = `odd placement, source is ${src.chroma}`;
+      if (!limited) reason = `odd placement, source is ${src.chroma}`;
     }
 
     const work = WORK_FORMATS[key];
