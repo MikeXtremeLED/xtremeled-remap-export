@@ -162,8 +162,8 @@ Both do the same thing — remove the download block. You only need to do this o
 ## Quick workflow
 
 1. **Mapping page** — set your input canvas to the stageview resolution (e.g. `10400×416` for a
-   50×2 m P4.81 screen), add a screen (output) and create slices — or **Import XML** from
-   Resolume / **Import CSV** from Hippotizer.
+   50×2 m P4.81 screen), add a screen (output) and create slices — or **Mapping file** →
+   Import Resolume XML / Import Hippotizer CSV.
 2. Check the mapping with a **test pattern** on the actual LED wall.
 3. **Export page** — add your stageview footage, tweak transform/trim if needed, choose where it
    **Plays back on** and hit **Export** (the button shows how many clips, e.g. **Export 3 clips**).

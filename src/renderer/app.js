@@ -9,13 +9,16 @@ const FILE_MANAGER = IS_MAC ? 'Finder' : 'Explorer';
 // ---------------- state ----------------
 let project = null;
 let page = 'editor'; // 'editor' | 'render'
-let view = 'input'; // 'input' | 'output'
+let view = 'input'; // 'input' | 'output'; in the Both view, the band last clicked
+let bothView = false; // input and output together, on one canvas
 let selId = null; // selected slice id
 let selScreenId = null; // selected screen id (tree selection when no slice selected)
 let activeScreenId = null;
 let caps = null;
 let gpuEncoders = null; // null until the background test has finished
-let maskEdit = false;
+let maskEditId = null; // the slice whose mask points are being edited
+const collapsedScreens = new Set(); // screens folded shut in the tree, for this session
+let revealedSelId = null; // the selection the tree last scrolled to
 // Keep aspect ratio while scaling a slice in the Output view (toolbar lock or Shift).
 let outLock = localStorage.getItem('xre:outlock') === '1';
 const refImgs = { input: null, output: null };
@@ -82,7 +85,7 @@ function selectScreen(id) {
   refreshSliceList();
   refreshProps();
   refreshScreenSelectors();
-  if (view === 'output' && changed) fitView('output');
+  if (outputShown() && changed) fitView('output');
   draw();
 }
 function selectSlice(id) {
@@ -93,7 +96,7 @@ function selectSlice(id) {
     const changed = activeScreenId !== scrId;
     selScreenId = scrId;
     activeScreenId = scrId;
-    if (view === 'output' && changed) fitView('output');
+    if (outputShown() && changed) fitView('output');
   }
   refreshSliceList();
   refreshProps();
@@ -483,6 +486,7 @@ async function restoreStoredRefs() {
 }
 
 // ---------------- canvas & drawing (editor) ----------------
+let lastCanvasSize = { w: 0, h: 0 };
 function resizeCanvas() {
   const rect = canvas.parentElement.getBoundingClientRect();
   const statusH = ($('statusbar') ? $('statusbar').offsetHeight : 24) + $('map-checkbar').offsetHeight;
@@ -494,6 +498,9 @@ function resizeCanvas() {
   canvas.width = Math.round(cw * dpr);
   canvas.height = Math.round(ch * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // the bands follow the canvas, so their views have to as well
+  if (bothView && (cw !== lastCanvasSize.w || ch !== lastCanvasSize.h)) shownViews().forEach(fitView);
+  lastCanvasSize = { w: cw, h: ch };
   draw();
 }
 
@@ -502,15 +509,84 @@ function cssSize(c) {
   return { w: parseFloat(c.style.width) || c.width, h: parseFloat(c.style.height) || c.height };
 }
 
+function outputShown() {
+  return bothView || view === 'output';
+}
+
+// The Both view stacks two bands on the one canvas: the input on top, as high as a wide wall
+// needs, the output in the rest. Every view transform is in canvas coordinates.
+const BOTH_MARGIN = 18;
+function bothSplitY() {
+  const { w: cw, h: ch } = cssSize();
+  const { w: W, h: H } = worldSize('input');
+  const wanted = Math.round((cw - BOTH_MARGIN * 2) * (H / W)) + BOTH_MARGIN * 2;
+  return Math.round(Math.max(Math.min(ch * 0.35, 110), Math.min(ch * 0.55, wanted)));
+}
+
+function bandRect(v) {
+  const { w: cw, h: ch } = cssSize();
+  if (!bothView) return { x: 0, y: 0, w: cw, h: ch };
+  const split = bothSplitY();
+  return v === 'input' ? { x: 0, y: 0, w: cw, h: split } : { x: 0, y: split, w: cw, h: ch - split };
+}
+
+function bandAt(py) {
+  return py < bothSplitY() ? 'input' : 'output';
+}
+
+// The band that was clicked becomes the one the arrows, list and zoom readout work on
+function setBand(v) {
+  if (!bothView || v === view) return;
+  view = v;
+  refreshRefPanel();
+  refreshSliceList();
+  updateZoomLabel();
+}
+
+function shownViews() {
+  return bothView ? ['input', 'output'] : [view];
+}
+
 function fitView(v) {
   const t = vt[v];
   const { w: W, h: H } = worldSize(v);
-  const { w: cw, h: ch } = cssSize();
-  const margin = 50;
-  const scale = Math.min((cw - margin * 2) / W, (ch - margin * 2) / H);
+  const b = bandRect(v);
+  const margin = bothView ? BOTH_MARGIN : 50;
+  const scale = Math.min((b.w - margin * 2) / W, (b.h - margin * 2) / H);
   t.scale = Math.max(0.001, Math.min(8, scale));
-  t.ox = (cw - W * t.scale) / 2;
-  t.oy = (ch - H * t.scale) / 2;
+  t.ox = b.x + (b.w - W * t.scale) / 2;
+  t.oy = b.y + (b.h - H * t.scale) / 2;
+  updateZoomLabel();
+}
+
+function frameRect(v, r) {
+  const t = vt[v];
+  const b = bandRect(v);
+  const margin = 16;
+  t.scale = Math.max(0.002, Math.min(8, Math.min((b.w - margin * 2) / r.w, (b.h - margin * 2) / r.h)));
+  t.ox = b.x + (b.w - r.w * t.scale) / 2 - r.x * t.scale;
+  t.oy = b.y + (b.h - r.h * t.scale) / 2 - r.y * t.scale;
+}
+
+// Fills the view with the selected slice; with nothing selected, the whole canvas
+function frameSelection() {
+  const s = selected();
+  for (const v of shownViews()) {
+    if (s) frameRect(v, sliceRect(s, v));
+    else fitView(v);
+  }
+  updateZoomLabel();
+  draw();
+}
+
+function zoomButtons(factor) {
+  const active = view;
+  for (const v of shownViews()) {
+    const b = bandRect(v);
+    view = v;
+    zoomAt(b.x + b.w / 2, b.y + b.h / 2, factor);
+  }
+  view = active;
   updateZoomLabel();
 }
 
@@ -576,13 +652,39 @@ function maskScreenPoints(s) {
 function draw() {
   if (!project || !ctx || page !== 'editor') return;
   currentMapCheck();
-  const t = vt[view];
   const { w: cw, h: ch } = cssSize();
-  const { w: W, h: H } = worldSize(view);
-
   ctx.clearRect(0, 0, cw, ch);
   ctx.fillStyle = '#202426';
   ctx.fillRect(0, 0, cw, ch);
+  if (!bothView) {
+    drawView();
+    return;
+  }
+  const active = view;
+  for (const v of ['input', 'output']) {
+    const b = bandRect(v);
+    view = v;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(b.x, b.y, b.w, b.h);
+    ctx.clip();
+    drawView();
+    ctx.font = 'bold 10px -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = v === active ? '#f7941e' : '#8b9195';
+    ctx.fillText(v === 'input' ? 'INPUT' : `OUTPUT · ${activeScreen().name}`, b.x + 8, b.y + 5);
+    ctx.restore();
+  }
+  view = active;
+  ctx.fillStyle = '#34383b';
+  ctx.fillRect(0, bandRect('output').y, cw, 1);
+}
+
+// One view of the mapping, in the current `view`
+function drawView() {
+  const t = vt[view];
+  const { w: W, h: H } = worldSize(view);
 
   const cx = toScreenX(0), cy = toScreenY(0);
   const cwid = W * t.scale, chei = H * t.scale;
@@ -651,7 +753,7 @@ function draw() {
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.setLineDash([]);
-      if (isSel && maskEdit) {
+      if (isSel && maskEditActive()) {
         pts.forEach((p) => {
           ctx.beginPath();
           ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
@@ -675,7 +777,7 @@ function draw() {
         extras.push('S' + (idx + 1));
       }
       const sub = `${r.w}×${r.h}` + (extras.length ? ' · ' + extras.join(' ') : '');
-      ctx.font = 'bold 11px -apple-system, sans-serif';
+      ctx.font = 'bold 11px -apple-system, "Segoe UI", sans-serif';
       const tw = Math.max(ctx.measureText(label).width, ctx.measureText(sub).width - 14);
       const px = x + w / 2, py = y + h / 2;
       ctx.fillStyle = 'rgba(10,12,13,0.78)';
@@ -685,7 +787,7 @@ function draw() {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, px, py - 6);
-      ctx.font = '10px -apple-system, sans-serif';
+      ctx.font = '10px -apple-system, "Segoe UI", sans-serif';
       ctx.fillStyle = off ? '#6d7276' : '#f7941e';
       ctx.fillText(sub, px, py + 7);
       drawScalePill(s, px + bw / 2, py, x, y, w, h, bh, off);
@@ -709,7 +811,7 @@ function draw() {
     }
   }
 
-  ctx.font = '10px -apple-system, sans-serif';
+  ctx.font = '10px -apple-system, "Segoe UI", sans-serif';
   ctx.fillStyle = '#8b9195';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
@@ -718,7 +820,7 @@ function draw() {
 
 function maskEditActive() {
   const s = selected();
-  return maskEdit && view === 'input' && s && maskUsable(s);
+  return !!maskEditId && maskEditId === selId && view === 'input' && !!s && maskUsable(s);
 }
 
 // ---------------- mapping check ----------------
@@ -742,7 +844,7 @@ function currentMapCheck() {
 }
 
 function goToProblem(p) {
-  if (view !== p.view) switchView(p.view);
+  if (!bothView && view !== p.view) switchView(p.view);
   selectSlice(p.sliceId);
 }
 
@@ -831,7 +933,7 @@ function drawMapProblems() {
 function drawScalePill(s, labelRight, cy, x, y, w, h, labelH, off) {
   const info = MapCheck.scaleInfo(s);
   const rgb = info.exact ? '76,175,80' : '247,148,30';
-  ctx.font = 'bold 10px -apple-system, sans-serif';
+  ctx.font = 'bold 10px -apple-system, "Segoe UI", sans-serif';
   const pw = Math.ceil(ctx.measureText(info.label).width) + 14, ph = 18;
   let px = Math.round(labelRight + 5), py = Math.round(cy - ph / 2);
   if (px + pw > x + w) {
@@ -1029,6 +1131,7 @@ function insertMaskPoint(s, wx, wy) {
 function onMouseDown(e) {
   if (!project || page !== 'editor') return;
   const px = e.offsetX, py = e.offsetY;
+  if (bothView) setBand(bandAt(py));
   const t = vt[view];
 
   if (e.button === 1 || spaceDown) {
@@ -1077,9 +1180,11 @@ function onMouseDown(e) {
   const s = sliceAt(px, py);
   if (s) {
     if (selId !== s.id) {
+      const screenChanged = activeScreenId !== sliceScreenId(s);
       selId = s.id;
       selScreenId = sliceScreenId(s);
       activeScreenId = selScreenId;
+      if (bothView && screenChanged) fitView('output');
       refreshSliceList();
       refreshProps();
     }
@@ -1109,8 +1214,20 @@ function onDblClick(e) {
   markDirty();
 }
 
+// Hovering only looks at the band under the cursor; a click is what makes it the active one
 function onMouseMove(e) {
   if (!project || page !== 'editor') return;
+  if (!bothView || drag) {
+    trackMouse(e);
+    return;
+  }
+  const active = view;
+  view = bandAt(e.offsetY);
+  trackMouse(e);
+  view = active;
+}
+
+function trackMouse(e) {
   const px = e.offsetX, py = e.offsetY;
   const wpt = toWorld(px, py);
   $('status-pos').textContent = `${view === 'input' ? 'Input' : 'Output · ' + activeScreen().name}: ${Math.round(wpt.x)}, ${Math.round(wpt.y)}  ·  zoom ${Math.round(vt[view].scale * 100)}%${maskEditActive() ? '  ·  MASK EDIT' : ''}`;
@@ -1183,14 +1300,21 @@ function onMouseUp() {
 function onWheel(e) {
   if (page !== 'editor') return;
   e.preventDefault();
+  const active = view;
+  if (bothView) view = bandAt(e.offsetY);
   const t = vt[view];
-  if (e.ctrlKey || e.metaKey) {
-    zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.01));
+  const mouse = MapEdit.isMouseWheel(e, IS_MAC);
+  if (mouse) {
+    zoomAt(e.offsetX, e.offsetY, MapEdit.notchFactor(e));
+  } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+    zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.01)); // pinch on a trackpad
   } else {
-    t.ox -= e.deltaX;
-    t.oy -= e.deltaY;
+    const pan = MapEdit.panDelta(e);
+    t.ox -= pan.x;
+    t.oy -= pan.y;
     draw();
   }
+  view = active;
 }
 
 function zoomAt(px, py, factor) {
@@ -1210,13 +1334,26 @@ function refreshSliceList() {
   if (!list) return;
   const scroll = list.scrollTop;
   list.innerHTML = '';
+  // A new selection opens its screen and scrolls to its row; a screen you fold shut stays shut
+  const reveal = selId !== revealedSelId && selId !== null;
+  revealedSelId = selId;
+  if (reveal && selected()) collapsedScreens.delete(sliceScreenId(selected()));
+  let selectedRow = null;
 
   project.screens.forEach((sc) => {
     const head = document.createElement('div');
     head.className = 'screen-row' + (selectedScreen() && selectedScreen().id === sc.id ? ' selected' : '');
     const chev = document.createElement('span');
     chev.className = 'chev';
-    chev.textContent = '▾';
+    const folded = collapsedScreens.has(sc.id);
+    chev.textContent = folded ? '▸' : '▾';
+    chev.title = folded ? 'Show the slices' : 'Hide the slices';
+    chev.onclick = (e) => {
+      e.stopPropagation();
+      if (folded) collapsedScreens.delete(sc.id);
+      else collapsedScreens.add(sc.id);
+      refreshSliceList();
+    };
     const nm = document.createElement('span');
     nm.className = 'nm';
     nm.textContent = sc.name;
@@ -1249,9 +1386,10 @@ function refreshSliceList() {
     list.appendChild(head);
 
     project.slices.forEach((s) => {
-      if (sliceScreenId(s) !== sc.id) return;
+      if (sliceScreenId(s) !== sc.id || collapsedScreens.has(sc.id)) return;
       const item = document.createElement('div');
       item.className = 'slice-item' + (s.id === selId ? ' selected' : '') + (s.enabled === false ? ' off' : '');
+      if (s.id === selId) selectedRow = item;
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = s.enabled !== false;
@@ -1317,6 +1455,7 @@ function refreshSliceList() {
     });
   });
   list.scrollTop = scroll;
+  if (reveal && selectedRow) selectedRow.scrollIntoView({ block: 'nearest' });
 }
 
 const FLIP_LABELS = ['None', 'H', 'V', 'H+V'];
@@ -1366,10 +1505,10 @@ function refreshProps() {
   }
   const set = setField;
   refreshOutLockBtn();
-  if (!s) {
-    $('mask-edit').checked = false;
-    return;
-  }
+  // Edit mode belongs to one slice: it ends when the selection moves or the mask goes away
+  if (maskEditId && (!s || s.id !== maskEditId || !maskUsable(s))) maskEditId = null;
+  refreshMaskBar();
+  if (!s) return;
   set('sl-name', s.name);
   $('sl-enabled').checked = s.enabled !== false;
   $('sl-screen').value = sliceScreenId(s);
@@ -1383,12 +1522,40 @@ function refreshProps() {
   $('sl-flip').classList.toggle('active', !!s.flip);
 
   const bb = s.mask ? Geometry.maskBBox(s.mask) : null;
+  // Collapsed until there is a mask; a switched-off mask keeps its points and can come back
+  const hasMask = maskUsable(s);
+  $('mask-add-row').classList.toggle('hidden', hasMask);
+  $('mask-body').classList.toggle('hidden', !hasMask);
+  $('mask-add').textContent = s.mask && s.mask.points ? 'Turn mask back on' : 'Add mask';
   $('mask-enabled').checked = !!(s.mask && s.mask.enabled);
-  $('mask-edit').checked = maskEdit;
+  $('mask-edit').classList.toggle('active', maskEditId === s.id);
+  $('mask-edit').textContent = maskEditId === s.id ? 'Done editing' : 'Edit points';
   set('mask-x', bb ? bb.x : '');
   set('mask-y', bb ? bb.y : '');
   set('mask-w', bb ? bb.w : '');
   set('mask-h', bb ? bb.h : '');
+}
+
+function refreshMaskBar() {
+  $('mask-bar').classList.toggle('hidden', !(maskEditId && maskEditId === selId && (bothView || view === 'input')));
+}
+
+function startMaskEdit() {
+  const s = selected();
+  if (!s || !maskUsable(s)) return;
+  if (bothView) setBand('input');
+  else if (view !== 'input') switchView('input');
+  maskEditId = s.id;
+  frameRect('input', s.in);
+  updateZoomLabel();
+  refreshProps();
+  draw();
+}
+
+function stopMaskEdit() {
+  maskEditId = null;
+  refreshProps();
+  draw();
 }
 
 function refreshProjectFields() {
@@ -1437,11 +1604,19 @@ function refreshAll() {
 
 // ---------------- actions ----------------
 function switchView(v) {
-  view = v;
-  $('tab-input').classList.toggle('active', v === 'input');
-  $('tab-output').classList.toggle('active', v === 'output');
+  const wasBoth = bothView;
+  bothView = v === 'both';
+  if (!bothView) view = v;
+  ['input', 'output', 'both'].forEach((id) => $(`tab-${id}`).classList.toggle('active', v === id));
+  // the views live in canvas coordinates, and those change when the bands come or go
+  if (bothView !== wasBoth) {
+    fitView('input');
+    fitView('output');
+  }
+  if (view === 'output' && !bothView) maskEditId = null;
   refreshRefPanel();
   refreshSliceList();
+  refreshProps();
   refreshScreenSelectors();
   updateZoomLabel();
   draw();
@@ -1519,7 +1694,7 @@ function deleteSlice() {
     selScreenId = project.screens[0].id;
     activeScreenId = selScreenId;
     refreshScreenSelectors();
-    if (view === 'output') fitView('output');
+    if (outputShown()) fitView('output');
   }
   refreshSliceList();
   refreshProps();
@@ -1560,37 +1735,6 @@ function deleteSelectedScreen() {
   markDirty();
 }
 
-function autoSplitSlice(s, partW, rowH, startX, startY, gapY) {
-  const n = Math.max(1, Math.ceil(s.out.w / partW));
-  const parts = [];
-  for (let i = 0; i < n; i++) {
-    const ox0 = i * partW;
-    const ow = Math.min(partW, s.out.w - ox0);
-    const fx0 = ox0 / s.out.w;
-    const fx1 = (ox0 + ow) / s.out.w;
-    parts.push(newSliceDefaults({
-      id: uid(),
-      name: `${s.name} ${i + 1}/${n}`,
-      screenId: sliceScreenId(s),
-      in: {
-        x: Math.round(s.in.x + fx0 * s.in.w),
-        y: s.in.y,
-        w: Math.round((fx1 - fx0) * s.in.w),
-        h: s.in.h,
-      },
-      out: {
-        x: Math.round(startX),
-        y: Math.round(startY + i * (rowH + gapY)),
-        w: Math.round(ow),
-        h: Math.round(rowH),
-      },
-    }));
-  }
-  const idx = project.slices.indexOf(s);
-  project.slices.splice(idx, 1, ...parts);
-  selId = parts[0].id;
-}
-
 // ---------------- modals ----------------
 function openModal(html) {
   const root = $('modal-root');
@@ -1604,6 +1748,69 @@ function closeModal() {
   root.innerHTML = '';
 }
 
+function modalOpen() {
+  return !$('modal-root').classList.contains('hidden');
+}
+
+// A dialog field as a whole number: NaN when it isn't one. `empty` is what an empty field means.
+function dialogInt(id, empty) {
+  const str = String($(id).value).trim();
+  if (str === '' && empty !== undefined) return empty;
+  const n = Math.round(calcNum(str));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function rememberedPanelWidth() {
+  try {
+    const stored = parseInt(localStorage.getItem('xre:panelw'), 10);
+    if (stored > 0) return stored;
+  } catch (e) { /* only a convenience */ }
+  return $('tp-grid').checked && parseInt($('tp-grid-w').value, 10) > 0 ? parseInt($('tp-grid-w').value, 10) : '';
+}
+
+function rememberPanelWidth(panelW) {
+  try {
+    if (panelW > 0) localStorage.setItem('xre:panelw', String(panelW));
+    else localStorage.removeItem('xre:panelw');
+  } catch (e) { /* only a convenience */ }
+}
+
+// The rows on the output canvas, to scale; whatever does not fit shows red, outside the frame
+function splitSketchSvg(l, canvas, short) {
+  const VW = 480, VH = 270;
+  const x0 = Math.min(0, ...l.rects.map((r) => r.x)), y0 = Math.min(0, ...l.rects.map((r) => r.y));
+  const x1 = Math.max(canvas.w, l.right), y1 = Math.max(canvas.h, l.bottom);
+  const k = Math.min(VW / (x1 - x0), VH / (y1 - y0));
+  const sx = (x) => (x - x0) * k + 1;
+  const sy = (y) => (y - y0) * k + 1;
+  const parts = [`<rect x="${sx(0)}" y="${sy(0)}" width="${canvas.w * k}" height="${canvas.h * k}" fill="#141617" stroke="#42484c" />`];
+  const noun = l.quarter ? 'Column' : 'Row';
+  const seamsFit = l.panelW && l.panelW * k >= 3;
+  l.rects.forEach((r, i) => {
+    const over = r.x < 0 || r.y < 0 || r.x + r.w > canvas.w || r.y + r.h > canvas.h;
+    const stroke = over ? '#e05555' : '#f7941e';
+    const w = r.w * k, h = r.h * k;
+    parts.push(`<rect x="${sx(r.x) + 0.5}" y="${sy(r.y) + 0.5}" width="${Math.max(1, w - 1)}" height="${Math.max(1, h - 1)}" fill="${over ? 'rgba(224,85,85,0.18)' : 'rgba(247,148,30,0.14)'}" stroke="${stroke}" />`);
+    if (seamsFit) {
+      const seams = Math.ceil(l.widths[i] / l.panelW);
+      for (let p = 1; p < seams; p++) {
+        const d = p * l.panelW * k;
+        parts.push(l.quarter
+          ? `<line x1="${sx(r.x)}" y1="${sy(r.y) + d}" x2="${sx(r.x) + w}" y2="${sy(r.y) + d}" stroke="rgba(247,148,30,0.28)" />`
+          : `<line x1="${sx(r.x) + d}" y1="${sy(r.y)}" x2="${sx(r.x) + d}" y2="${sy(r.y) + h}" stroke="rgba(247,148,30,0.28)" />`);
+      }
+    }
+    if (h >= 18 && w >= 170 && l.rects.length <= 12) {
+      const panels = l.panels ? ` · ${Math.round(l.panels[i] * 10) / 10} panels` : '';
+      const text = `${noun} ${i + 1}${panels} · ${r.w}×${r.h}`;
+      const lw = text.length * 5.8 + 16;
+      parts.push(`<rect x="${sx(r.x) + w / 2 - lw / 2}" y="${sy(r.y) + h / 2 - 10}" width="${lw}" height="20" rx="3" fill="#1a1d1f" />`);
+      parts.push(`<text x="${sx(r.x) + w / 2}" y="${sy(r.y) + h / 2 + 4}" text-anchor="middle" font-size="11" fill="#cfd3d6">${text}</text>`);
+    }
+  });
+  return `<svg class="nm-preview${short ? ' short' : ''}" viewBox="0 0 ${VW + 2} ${VH + 2}" preserveAspectRatio="xMidYMid meet" font-family="-apple-system, 'Segoe UI', sans-serif">${parts.join('')}</svg>`;
+}
+
 function openSplitModal() {
   const s = selected();
   if (!s) {
@@ -1611,20 +1818,28 @@ function openSplitModal() {
     return;
   }
   const sc = activeScreen();
-  const defW = Math.min(sc.width, s.out.w);
+  const canvasSize = { w: sc.width, h: sc.height };
+  const quarter = Geometry.netRotation(s) % 180 !== 0;
+  const noun = quarter ? 'column' : 'row';
+  const Noun = quarter ? 'Column' : 'Row';
+  const room = Math.min(quarter ? sc.height : sc.width, s.in.w);
+  const roundedPart = (panelW) => MapEdit.partWidth(room, panelW) || room;
+  const panelDefault = rememberedPanelWidth();
   openModal(`
-    <div class="modal" style="width:440px">
-      <div class="modal-head">Split "${s.name}" into rows<button class="close-x" id="m-close">✕</button></div>
+    <div class="modal" style="width:540px" data-enter-apply="1">
+      <div class="modal-head"><span id="m-title"></span><button class="close-x" id="m-close">✕</button></div>
       <div class="modal-body">
-        <div class="note">A wide LED screen often doesn't fit the output width in one piece.
-        This cuts the slice into equal parts and stacks them as rows on the output canvas —
-        exactly like the multi-row setup in Resolume. The input stays one continuous strip.</div>
-        <div class="row"><label style="min-width:110px">Part width</label><input type="number" id="m-partw" class="num" style="width:90px" value="${defW}" /><span class="dim">px per row</span></div>
-        <div class="row"><label style="min-width:110px">Row height</label><input type="number" id="m-rowh" class="num" style="width:90px" value="${s.out.h}" /><span class="dim">px</span></div>
-        <div class="row"><label style="min-width:110px">Start X</label><input type="number" id="m-startx" class="num" style="width:90px" value="0" /></div>
-        <div class="row"><label style="min-width:110px">Start Y</label><input type="number" id="m-starty" class="num" style="width:90px" value="0" /></div>
-        <div class="row"><label style="min-width:110px">Row gap Y</label><input type="number" id="m-gapy" class="num" style="width:90px" value="0" /><span class="dim">px between rows</span></div>
+        <div class="nm-grid pairs">
+          <label for="m-partw">Part width</label><div class="nm-field"><input type="text" id="m-partw" class="num" value="${roundedPart(panelDefault)}" /><span class="dim">px</span></div>
+          <label for="m-panelw">Panel width</label><div class="nm-field"><input type="text" id="m-panelw" class="num" value="${panelDefault}" /><span class="dim">px</span></div>
+          <label for="m-rowh">${Noun} ${quarter ? 'width' : 'height'}</label><div class="nm-field"><input type="text" id="m-rowh" class="num" value="${s.in.h}" /><span class="dim">px</span></div>
+          <label for="m-gapy">${Noun} gap</label><div class="nm-field"><input type="text" id="m-gapy" class="num" value="0" /><span class="dim">px</span></div>
+          <label for="m-startx">Start X</label><div class="nm-field"><input type="text" id="m-startx" class="num" value="0" /></div>
+          <label for="m-starty">Start Y</label><div class="nm-field"><input type="text" id="m-starty" class="num" value="0" /></div>
+        </div>
+        <div class="nm-preview-wrap" id="m-sketch"></div>
         <div class="split-summary" id="m-summary"></div>
+        <div class="split-note hidden" id="m-note"></div>
       </div>
       <div class="modal-foot">
         <button id="m-cancel">Cancel</button>
@@ -1632,37 +1847,191 @@ function openSplitModal() {
       </div>
     </div>
   `);
-  const updateSummary = () => {
-    const partW = clampInt($('m-partw').value, 1, 100000);
-    const n = Math.max(1, Math.ceil(s.out.w / partW));
-    const last = s.out.w - (n - 1) * partW;
-    const rowH = clampInt($('m-rowh').value, 1, 100000);
-    const gap = clampInt($('m-gapy').value, 0, 100000);
-    const totalH = n * rowH + (n - 1) * gap;
-    $('m-summary').textContent =
-      `→ ${n} rows: ${n > 1 ? `${n - 1} × ${partW}px + 1 × ${last}px` : `1 × ${last}px`}, ` +
-      `total ${totalH}px high on output (canvas ${sc.height}px)`;
+  $('m-title').textContent = `Split "${s.name}" into ${noun}s`;
+  const readLayout = () => {
+    const panelW = dialogInt('m-panelw', 0);
+    const partRaw = dialogInt('m-partw');
+    const rowH = dialogInt('m-rowh');
+    const gap = dialogInt('m-gapy', 0);
+    const startX = dialogInt('m-startx', 0);
+    const startY = dialogInt('m-starty', 0);
+    const valid = [panelW, partRaw, rowH, gap, startX, startY].every(Number.isFinite) && panelW >= 0 && partRaw >= 1 && rowH >= 1 && gap >= 0;
+    if (!valid) return null;
+    const partW = panelW ? MapEdit.partWidth(partRaw, panelW) : partRaw;
+    if (partW < 1) return { tooSmall: true };
+    return MapEdit.layout({ totalW: s.in.w, rowH, partW, panelW, startX, startY, gap, canvas: canvasSize, quarter });
   };
-  ['m-partw', 'm-rowh', 'm-gapy'].forEach((id) => ($(id).oninput = updateSummary));
-  updateSummary();
+  const update = () => {
+    const l = readLayout();
+    const usable = l && !l.tooSmall && l.fits;
+    const summary = $('m-summary');
+    summary.classList.toggle('bad', !usable);
+    summary.textContent = !l ? 'Fill in the sizes' : l.tooSmall ? 'The part width is smaller than one panel' : MapEdit.summary(l, canvasSize);
+    $('m-sketch').innerHTML = l && !l.tooSmall && l.rects.length
+      ? splitSketchSvg(l, canvasSize, true) + `<span class="nm-res">Output ${sc.width}×${sc.height}</span>`
+      : '';
+    const apply = $('m-apply');
+    apply.disabled = !usable;
+    const n = l && !l.tooSmall ? l.widths.length : 0;
+    apply.textContent = usable ? `Split into ${n} ${noun}${n === 1 ? '' : 's'}` : 'Split';
+    const notes = [];
+    if (l && !l.tooSmall && !MapCheck.scaleInfo(s).exact) notes.push(`This slice is scaled (${MapCheck.scaleInfo(s).label}). Split makes the parts pixel for pixel.`);
+    if (l && !l.tooSmall && l.rects.length && l.rects[0][quarter ? 'w' : 'h'] !== s.in.h) notes.push(`${Noun}s are stretched: the input is ${s.in.h} px ${quarter ? 'wide' : 'high'}.`);
+    const outside = usable ? MapEdit.partsOutsideMask(s, l) : 0;
+    if (outside) notes.push(`${outside} part${outside === 1 ? '' : 's'} outside the mask start${outside === 1 ? 's' : ''} switched off.`);
+    $('m-note').textContent = notes.join(' ');
+    $('m-note').classList.toggle('hidden', !notes.length);
+  };
+  ['m-partw', 'm-rowh', 'm-gapy', 'm-startx', 'm-starty'].forEach((id) => ($(id).oninput = update));
+  $('m-panelw').oninput = () => {
+    const panelW = dialogInt('m-panelw', 0);
+    if (Number.isFinite(panelW) && panelW >= 0) $('m-partw').value = roundedPart(panelW);
+    update();
+  };
+  $('m-partw').onchange = () => {
+    const panelW = dialogInt('m-panelw', 0);
+    const partRaw = dialogInt('m-partw');
+    if (panelW > 0 && partRaw >= panelW) $('m-partw').value = MapEdit.partWidth(partRaw, panelW);
+    update();
+  };
+  update();
   $('m-close').onclick = closeModal;
   $('m-cancel').onclick = closeModal;
   $('m-apply').onclick = () => {
+    const l = readLayout();
+    const idx = project.slices.indexOf(s);
+    if (!l || l.tooSmall || !l.fits || idx < 0) return;
+    rememberPanelWidth(l.panelW);
     pushHistory();
-    autoSplitSlice(
-      s,
-      clampInt($('m-partw').value, 1, 100000),
-      clampInt($('m-rowh').value, 1, 100000),
-      clampInt($('m-startx').value, -100000, 100000),
-      clampInt($('m-starty').value, -100000, 100000),
-      clampInt($('m-gapy').value, 0, 100000)
-    );
+    const parts = MapEdit.splitSlice(s, l, uid);
+    project.slices.splice(idx, 1, ...parts);
+    selId = parts[0].id;
     closeModal();
     refreshSliceList();
     refreshProps();
     draw();
     markDirty();
   };
+  $('m-partw').focus();
+}
+
+const OUTPUT_PRESETS = [{ w: 3840, h: 2160 }, { w: 1920, h: 1080 }];
+
+// One screen for the whole setup of a wall; the alternative is starting from a mapping file
+function openNewMappingModal() {
+  const sc = project.screens[0];
+  const presetMatch = OUTPUT_PRESETS.findIndex((p) => p.w === sc.width && p.h === sc.height);
+  let preset = presetMatch; // -1 is Custom
+  const tabs = OUTPUT_PRESETS.map((p, i) => `<button class="tab" data-preset="${i}">${p.w}×${p.h}</button>`).join('');
+  openModal(`
+    <div class="modal" id="new-mapping" style="width:516px" data-enter-apply="1">
+      <div class="modal-head">New mapping<button class="close-x" id="m-close">✕</button></div>
+      <div class="modal-body">
+        <div class="nm-grid">
+          <label>Stageview</label>
+          <div class="nm-field">
+            <span class="x">W</span><input type="text" class="num" id="nm-w" value="${project.input.width}" />
+            <span class="x">H</span><input type="text" class="num" id="nm-h" value="${project.input.height}" />
+            <span class="dim">px</span>
+          </div>
+          <label>Output</label>
+          <div class="nm-field">
+            <div class="tabs">${tabs}<button class="tab" data-preset="-1">Custom</button></div>
+          </div>
+          <label class="hidden" id="nm-custom-label">Custom</label>
+          <div class="nm-field hidden" id="nm-custom">
+            <span class="x">W</span><input type="text" class="num" id="nm-ow" value="${sc.width}" />
+            <span class="x">H</span><input type="text" class="num" id="nm-oh" value="${sc.height}" />
+            <span class="dim">px</span>
+          </div>
+          <label>Panel width</label>
+          <div class="nm-field"><input type="text" class="num" id="nm-panel" value="${rememberedPanelWidth()}" /><span class="dim">px</span></div>
+        </div>
+        <div class="nm-preview-wrap" id="m-sketch"></div>
+        <div class="split-summary" id="m-summary"></div>
+      </div>
+      <div class="modal-foot">
+        <button id="m-cancel">Cancel</button>
+        <button id="m-apply" class="accent">Create mapping</button>
+      </div>
+      <div class="nm-alt">
+        <span class="lead">Or:</span>
+        <button id="nm-xml">Import Resolume XML</button>
+        <span class="sep">·</span>
+        <button id="nm-csv">Import Hippo CSV</button>
+        <span class="sep">·</span>
+        <span class="drop">drag a file here</span>
+      </div>
+    </div>
+  `);
+  const outputSize = () => {
+    if (preset >= 0) return OUTPUT_PRESETS[preset];
+    return { w: dialogInt('nm-ow'), h: dialogInt('nm-oh') };
+  };
+  const inRange = (n) => Number.isFinite(n) && n >= 1 && n <= 32768;
+  const readLayout = () => {
+    const w = dialogInt('nm-w');
+    const h = dialogInt('nm-h');
+    const out = outputSize();
+    const panelW = dialogInt('nm-panel', 0);
+    if (![w, h, out.w, out.h].every(inRange) || !Number.isFinite(panelW) || panelW < 0) return null;
+    const partW = MapEdit.partWidth(Math.min(w, out.w), panelW);
+    if (partW < 1) {
+      const narrow = w < out.w ? 'The stageview is' : w > out.w ? 'The output is' : 'The stageview and output are';
+      return { tooSmall: `${narrow} narrower than one panel` };
+    }
+    return { w, h, out, l: MapEdit.layout({ totalW: w, rowH: h, partW, panelW, canvas: out }) };
+  };
+  const update = () => {
+    document.querySelectorAll('#new-mapping [data-preset]').forEach((b) => b.classList.toggle('active', Number(b.dataset.preset) === preset));
+    $('nm-custom').classList.toggle('hidden', preset >= 0);
+    $('nm-custom-label').classList.toggle('hidden', preset >= 0);
+    const r = readLayout();
+    const usable = r && !r.tooSmall && r.l.fits;
+    const summary = $('m-summary');
+    summary.classList.toggle('bad', !usable);
+    summary.textContent = !r ? 'Fill in the sizes' : r.tooSmall || MapEdit.summary(r.l, r.out);
+    $('m-sketch').innerHTML = r && !r.tooSmall && r.l.rects.length
+      ? splitSketchSvg(r.l, r.out, false) + `<span class="nm-res">Output ${r.out.w}×${r.out.h}</span>`
+      : '';
+    $('m-apply').disabled = !usable;
+  };
+  ['nm-w', 'nm-h', 'nm-ow', 'nm-oh', 'nm-panel'].forEach((id) => ($(id).oninput = update));
+  document.querySelectorAll('#new-mapping [data-preset]').forEach((b) => {
+    b.onclick = () => {
+      preset = Number(b.dataset.preset);
+      update();
+      if (preset < 0) $('nm-ow').focus();
+    };
+  });
+  update();
+  $('m-close').onclick = closeModal;
+  $('m-cancel').onclick = closeModal;
+  $('nm-xml').onclick = () => { closeModal(); importXml(); };
+  $('nm-csv').onclick = () => { closeModal(); importCsv(); };
+  $('m-apply').onclick = async () => {
+    const r = readLayout();
+    if (!r || r.tooSmall || !r.l.fits) return;
+    if (!(await guardUnsaved())) return;
+    rememberPanelWidth(r.l.panelW);
+    closeModal();
+    pushHistory(true);
+    await switchToProject(newMappingProject(r.w, r.h, r.out, r.l));
+  };
+  $('nm-w').focus();
+}
+
+// The whole stageview as rows of whole panels on one output
+function newMappingProject(w, h, out, l) {
+  const p = newProject();
+  p.input = { width: w, height: h };
+  const scr = p.screens[0];
+  scr.width = out.w;
+  scr.height = out.h;
+  const whole = newSliceDefaults({ id: '', name: 'Row', screenId: scr.id, in: { x: 0, y: 0, w, h }, out: { x: 0, y: 0, w, h } });
+  p.slices = MapEdit.splitSlice(whole, l, uid);
+  if (p.slices.length === 1) p.slices[0].name = 'Slice 1';
+  return p;
 }
 
 // Asked once per batch when outputs already exist: 'overwrite', 'version', 'skip' or null (cancel)
@@ -5164,28 +5533,33 @@ function bindUI() {
   document.querySelector('.brand .logo').onclick = () => api.openExternal('https://www.xtremeled.nl/');
   $('tab-input').onclick = () => switchView('input');
   $('tab-output').onclick = () => switchView('output');
+  $('tab-both').onclick = () => switchView('both');
   $('btn-render').onclick = () => switchPage('render');
   $('btn-back-editor').onclick = () => switchPage('editor');
 
   $('btn-undo').onclick = undo;
   $('btn-redo').onclick = redo;
 
-  $('btn-zoom-in').onclick = () => { const c = cssSize(); zoomAt(c.w / 2, c.h / 2, 1.25); };
-  $('btn-zoom-out').onclick = () => { const c = cssSize(); zoomAt(c.w / 2, c.h / 2, 0.8); };
-  $('btn-zoom-fit').onclick = () => { fitView(view); draw(); };
+  $('btn-zoom-in').onclick = () => zoomButtons(1.25);
+  $('btn-zoom-out').onclick = () => zoomButtons(0.8);
+  $('btn-zoom-fit').onclick = () => { shownViews().forEach(fitView); draw(); };
+  $('btn-zoom-frame').onclick = frameSelection;
 
-  $('btn-new').onclick = async () => {
-    if (!(await guardUnsaved())) return;
-    pushHistory(true);
-    await switchToProject(newProject());
-  };
+  $('btn-new').onclick = openNewMappingModal;
+  $('btn-new').title = `New mapping (${IS_MAC ? '⌘N' : 'Ctrl+N'})`;
   $('btn-open-proj').onclick = openProject;
+  $('btn-open-proj').title = `Open project (${IS_MAC ? '⌘O' : 'Ctrl+O'})`;
   $('btn-undo').title = `Undo (${IS_MAC ? '⌘Z' : 'Ctrl+Z'})`;
-  $('btn-redo').title = `Redo (${IS_MAC ? '⇧⌘Z' : 'Ctrl+Shift+Z'})`;
+  $('btn-redo').title = `Redo (${IS_MAC ? '⇧⌘Z' : 'Ctrl+Y'})`;
   $('btn-save-proj').title = `Save project (${IS_MAC ? '⌘S' : 'Ctrl+S'})`;
   $('btn-save-proj').onclick = () => saveProject(false);
   $('btn-save-as').title = `Save the project under a new name (${IS_MAC ? '⇧⌘S' : 'Ctrl+Shift+S'})`;
   $('btn-save-as').onclick = () => saveProject(true);
+  $('btn-mapping-file').onclick = (e) => {
+    e.stopPropagation();
+    $('mapping-file-menu').classList.toggle('hidden');
+  };
+  window.addEventListener('click', () => $('mapping-file-menu').classList.add('hidden'));
   $('btn-import-xml').onclick = importXml;
   $('btn-export-xml').onclick = exportXml;
   $('btn-import-csv').onclick = importCsv;
@@ -5229,6 +5603,8 @@ function bindUI() {
       pushHistory();
       project.input[key] = clampInt($(id).value, 1, 32768);
       $(id).value = project.input[key];
+      fitView('input');
+      if (bothView) fitView('output'); // the bands share the height
       draw();
       drawRenderPreview();
       markDirty();
@@ -5280,7 +5656,7 @@ function bindUI() {
       $(id).value = scr[key];
       refreshSliceList();
       refreshScreenSelectors();
-      if (view === 'output') fitView('output');
+      if (outputShown()) fitView('output');
       draw();
       drawRenderPreview();
       markDirty();
@@ -5403,9 +5779,21 @@ function bindUI() {
     draw();
     markDirty();
   };
-  $('mask-edit').onchange = () => {
-    maskEdit = $('mask-edit').checked;
+  $('mask-add').onclick = () => {
+    const s = selected();
+    if (!s) return;
+    pushHistory();
+    const fresh = !s.mask || !s.mask.points;
+    if (fresh) s.mask = { enabled: true, points: Geometry.rectToPoints(s.in) };
+    s.mask.enabled = true;
+    refreshProps();
     draw();
+    markDirty();
+    if (fresh) startMaskEdit(); // an untouched mask does nothing yet, so go straight to the points
+  };
+  $('mask-edit').onclick = () => {
+    if (maskEditId) stopMaskEdit();
+    else startMaskEdit();
   };
   $('mask-reset').onclick = () => {
     const s = selected();
@@ -5457,6 +5845,7 @@ function bindUI() {
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     hideCtxMenu();
+    if (bothView) setBand(bandAt(e.offsetY));
     if (page !== 'editor' || maskEditActive()) return;
     const s = sliceAt(e.offsetX, e.offsetY);
     if (!s || view !== 'output') return;
@@ -5519,6 +5908,21 @@ function bindUI() {
     reselect = el;
   });
   document.addEventListener('focusout', () => { reselect = null; });
+  // What a text field held when it last agreed with the mapping: anything else is still typing
+  let fieldBaseline = null;
+  document.addEventListener('focusin', (e) => {
+    if (editable(e.target)) fieldBaseline = e.target.value;
+  });
+  document.addEventListener('change', (e) => {
+    if (e.target === document.activeElement && editable(e.target)) fieldBaseline = e.target.value;
+  });
+  // Undo with a field focused goes to the mapping, then the field shows the restored value
+  const undoFromField = async (el, redoing) => {
+    el.blur();
+    await (redoing ? redo() : undo());
+    if (document.body.contains(el)) el.focus();
+    fieldBaseline = el.value;
+  };
   document.addEventListener('mouseup', (e) => {
     const el = reselect;
     reselect = null;
@@ -5530,30 +5934,61 @@ function bindUI() {
   }, true);
 
   window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
+    const key = e.key.toLowerCase();
+    const command = (e.ctrlKey || e.metaKey) && !e.altKey;
+    const inModal = modalOpen();
+    if (command && key === 's') {
       e.preventDefault();
-      if ($('modal-root').classList.contains('hidden')) {
+      if (!inModal) {
         commitFieldEdit();
         saveProject(e.shiftKey);
       }
       return;
     }
     const tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+    const inField = tag === 'input' || tag === 'textarea' || tag === 'select';
+    if (inModal) {
+      // A dialog keeps the keyboard to itself. Esc cancels; Enter applies where that is safe.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        const out = $('m-cancel') || $('m-close') || $('m-ok');
+        if (out) out.click();
+        return;
+      }
+      if (e.key === 'Enter' && tag !== 'button' && $('modal-root').querySelector('[data-enter-apply]')) {
+        e.preventDefault();
+        if (!$('m-apply').disabled) $('m-apply').click();
+        return;
+      }
+      if (!inField) return;
+    } else {
+      if (command && !e.shiftKey && key === 'n') { e.preventDefault(); openNewMappingModal(); return; }
+      if (command && !e.shiftKey && key === 'o') { e.preventDefault(); openProject(); return; }
+      if (e.key === 'Escape' && maskEditId) { e.preventDefault(); stopMaskEdit(); return; }
+    }
+    if (inField) {
       // In text fields: ensure editing shortcuts work even if the platform menu
       // doesn't wire them up (seen on Windows). Let all other keys type normally.
-      const meta2 = e.ctrlKey || e.metaKey;
-      if (meta2 && (e.target.type === 'text' || e.target.type === 'search' || tag === 'textarea')) {
-        const k = e.key.toLowerCase();
-        if (k === 'a') { e.preventDefault(); e.target.select(); }
-        // c / v / x fall through to Chromium's native clipboard handling
+      const textual = e.target.type === 'text' || e.target.type === 'search' || tag === 'textarea';
+      if (command && textual && key === 'a') { e.preventDefault(); e.target.select(); }
+      // c / v / x fall through to Chromium's native clipboard handling
+      if (!inModal && page === 'editor' && command && (key === 'z' || key === 'y')) {
+        // Still typing: the field undoes its own text. Otherwise undo belongs to the mapping.
+        if (textual && e.target.value !== fieldBaseline) return;
+        e.preventDefault();
+        undoFromField(e.target, key === 'y' || e.shiftKey);
       }
       return;
     }
     const meta = e.metaKey || e.ctrlKey;
-    if (meta && e.key.toLowerCase() === 'z') {
+    if (meta && key === 'z') {
       e.preventDefault();
       if (e.shiftKey) redo(); else undo();
+      return;
+    }
+    if (meta && key === 'y') {
+      e.preventDefault();
+      redo();
       return;
     }
     if (page === 'render') {
@@ -5562,7 +5997,9 @@ function bindUI() {
       if (e.key.toLowerCase() === 'o') { $('rp-set-out').click(); return; }
       return;
     }
-    if (e.code === 'Space') { spaceDown = true; canvas.style.cursor = 'grab'; return; }
+    // Space is for panning: without this it would also press the last clicked button
+    if (e.code === 'Space') { e.preventDefault(); spaceDown = true; canvas.style.cursor = 'grab'; return; }
+    if (!meta && key === 'f') { e.preventDefault(); frameSelection(); return; }
     const s = selected();
     if ((e.key === 'Delete' || e.key === 'Backspace') && s) { e.preventDefault(); deleteSlice(); return; }
     if (meta && e.key.toLowerCase() === 'd' && s) { e.preventDefault(); duplicateSlice(); return; }
@@ -5597,9 +6034,14 @@ function bindUI() {
     const xmls = paths.filter((p) => extOf(p) === 'xml');
     const csvs = paths.filter((p) => extOf(p) === 'csv');
     const projs = paths.filter((p) => ['xreproj', 'json'].includes(extOf(p)));
+    // A question on screen waits for its answer; only New mapping invites a dropped file
+    const newDialog = !!$('new-mapping');
+    if (modalOpen() && !newDialog) return;
+    if (newDialog && (xmls.length || csvs.length || projs.length)) closeModal();
     if (xmls.length) return importXmlPath(xmls[0]);
     if (csvs.length) return importCsvPath(csvs[0]);
     if (projs.length) return openProjectPath(projs[0]);
+    if (newDialog) return;
     const scan = await api.scanFootage(paths, [...FOOTAGE_IMAGE_EXTS, ...VIDEO_EXTS]);
     if (!scan.sequences.length && !scan.rest.length) return;
     const browserImage = scan.rest.find((p) => IMAGE_EXTS.includes(extOf(p)));
@@ -5822,7 +6264,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   updateUndoButtons();
   await restoreStoredRefs();
   await loadAllRefs();
-  $('status-hint').textContent = `Drag = move · Handles = resize · Shift = keep ratio · Scroll = pan · ${IS_MAC ? '⌘' : 'Ctrl'}+scroll = zoom · ${IS_MAC ? '⌘' : 'Ctrl+'}Z undo`;
+  $('status-hint').textContent = `Drag = move · Handles = resize · Shift = keep ratio · ${IS_MAC ? 'Two fingers = pan · Pinch = zoom' : 'Scroll = zoom · Shift+scroll = pan'} · F = frame · Arrows = 1 px · ${IS_MAC ? '⌘' : 'Ctrl+'}Z undo`;
   resizeCanvas();
   fitView('input');
   fitView('output');
@@ -5864,6 +6306,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       goExport: () => switchPage('render'),
       viewInput: () => switchView('input'),
       viewOutput: () => switchView('output'),
+      viewBoth: () => switchView('both'),
       selectSlice: (i) => {
         const s = project.slices[i];
         if (!s) return;
@@ -5931,7 +6374,7 @@ window.addEventListener('DOMContentLoaded', async () => {
           const items = [...document.querySelectorAll('#screen-tree .slice-item')];
           out.slices = union(R(q('#left .panel-title')), ...items.map(R));
           out.sliceProps = R(q('#slice-props'));
-          out.xmlButtons = union(R($('btn-import-xml')), R($('btn-export-xml')));
+          out.xmlButtons = R($('btn-mapping-file'));
           // the drawn input canvas inside the editor view
           const cb = canvas.getBoundingClientRect();
           const t = vt[view];

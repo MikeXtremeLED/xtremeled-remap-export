@@ -23,29 +23,31 @@
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group">
-      <button id="btn-undo" title="Undo (⌘Z)">↶</button>
-      <button id="btn-redo" title="Redo (⇧⌘Z)">↷</button>
+      <button id="btn-undo">↶</button>
+      <button id="btn-redo">↷</button>
     </div>
     <div class="tb-sep"></div>
-    <div class="tb-group">
-      <button id="btn-import-xml" title="Import Resolume Advanced Output XML">Import XML</button>
-      <button id="btn-export-xml" title="Export Resolume-compatible XML">Export XML</button>
-    </div>
-    <div class="tb-sep"></div>
-    <div class="tb-group">
-      <button id="btn-import-csv" title="Import Green Hippo Hippotizer VideoMapper CSV">Import CSV</button>
-      <button id="btn-export-csv" title="Export Hippotizer-compatible VideoMapper CSV">Export CSV</button>
+    <div class="tb-group tb-menu">
+      <button id="btn-mapping-file" title="Import or export Resolume XML and Hippotizer CSV">Mapping file ▾</button>
+      <div id="mapping-file-menu" class="popup-menu hidden">
+        <button id="btn-import-xml" title="Import Resolume Advanced Output XML">Import Resolume XML…</button>
+        <button id="btn-import-csv" title="Import Green Hippo Hippotizer VideoMapper CSV">Import Hippotizer CSV…</button>
+        <button id="btn-export-xml" title="Export Resolume-compatible XML">Export Resolume XML…</button>
+        <button id="btn-export-csv" title="Export Hippotizer-compatible VideoMapper CSV">Export Hippotizer CSV…</button>
+      </div>
     </div>
     <div class="tb-sep"></div>
     <div class="tabs" id="view-tabs">
       <button id="tab-input" class="tab active">Input</button>
       <button id="tab-output" class="tab">Output</button>
+      <button id="tab-both" class="tab" title="Input and output together, one selection">Both</button>
     </div>
     <div class="tb-group zoom">
       <button id="btn-zoom-out" title="Zoom out">−</button>
       <span id="zoom-label">100%</span>
       <button id="btn-zoom-in" title="Zoom in">+</button>
       <button id="btn-zoom-fit" title="Zoom to fit">Fit</button>
+      <button id="btn-zoom-frame" title="Zoom to the selected slice (F)">Frame</button>
     </div>
     <div class="spacer"></div>
     <div id="toast-anchor"><div id="saved-toast" class="saved-toast hidden" role="status"><span class="chk">✓</span><span id="saved-toast-text"></span></div></div>
@@ -82,8 +84,8 @@
           <button id="btn-del-slice" class="danger">Delete</button>
         </div>
 
-        <div class="section">
-          <div class="panel-title">Reference — <span id="ref-view-label">Input</span></div>
+        <button class="acc-head" data-acc="reference" aria-expanded="false"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Reference — <span id="ref-view-label">Input</span></span></button>
+        <div class="section acc-body hidden" data-acc-body="reference">
           <div class="row">
             <button id="btn-ref-load">Load image…</button>
             <button id="btn-ref-clear" title="Remove reference">✕</button>
@@ -95,8 +97,8 @@
           </div>
         </div>
 
-        <div class="section" id="tp-section">
-          <div class="panel-title">Test pattern</div>
+        <button class="acc-head" data-acc="testpattern" aria-expanded="false"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Test pattern</span></button>
+        <div class="section acc-body hidden" data-acc-body="testpattern" id="tp-section">
           <div class="row">
             <button id="tp-preview">Set as reference</button>
             <button id="tp-save">Save PNG…</button>
@@ -116,9 +118,10 @@
       <div id="center">
         <div id="map-checkbar"></div>
         <canvas id="editor"></canvas>
+        <div id="mask-bar" class="hidden">MASK: Esc to stop</div>
         <div id="statusbar">
           <span id="status-pos"></span>
-          <span id="status-hint">Drag = move · Handles = resize · Shift = keep ratio · Scroll = pan · ⌘/Ctrl+scroll = zoom · ⌘Z undo</span>
+          <span id="status-hint"></span>
         </div>
       </div>
 
@@ -139,7 +142,9 @@
           <div class="row"><label>Name</label><input type="text" id="sl-name" /></div>
           <div class="row">
             <label>Enabled</label><input type="checkbox" id="sl-enabled" />
-            <label style="min-width:auto">Screen</label>
+          </div>
+          <div class="row">
+            <label>Screen</label>
             <select id="sl-screen" style="flex:1"></select>
           </div>
 
@@ -185,19 +190,22 @@
             </button>
           </div>
 
-          <div class="subtitle">Input mask (key points)</div>
-          <div class="row">
-            <label>Enabled</label><input type="checkbox" id="mask-enabled" />
-            <label style="min-width:auto">Edit on canvas</label><input type="checkbox" id="mask-edit" />
+          <div class="subtitle">Input mask</div>
+          <div class="row" id="mask-add-row"><button id="mask-add">Add mask</button></div>
+          <div id="mask-body" class="hidden">
+            <div class="row">
+              <button id="mask-edit" class="mask-edit">Edit points</button>
+              <label class="mask-on" title="Switch the mask off. Its points are kept.">Enabled</label><input type="checkbox" id="mask-enabled" title="Switch the mask off. Its points are kept." />
+            </div>
+            <div class="row4">
+              <label>X</label><input type="text" inputmode="text" id="mask-x" class="num" />
+              <label>Y</label><input type="text" inputmode="text" id="mask-y" class="num" />
+              <label>W</label><input type="text" inputmode="text" id="mask-w" class="num" />
+              <label>H</label><input type="text" inputmode="text" id="mask-h" class="num" />
+            </div>
+            <div class="note">In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it.</div>
+            <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
           </div>
-          <div class="row4">
-            <label>X</label><input type="text" inputmode="text" id="mask-x" class="num" />
-            <label>Y</label><input type="text" inputmode="text" id="mask-y" class="num" />
-            <label>W</label><input type="text" inputmode="text" id="mask-w" class="num" />
-            <label>H</label><input type="text" inputmode="text" id="mask-h" class="num" />
-          </div>
-          <div class="note">In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it.</div>
-          <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
         </div>
 
         <div class="section">
@@ -456,6 +464,7 @@
   <script src="../shared/exportplan.js"></script>
   <script src="../shared/geometry.js"></script>
   <script src="../shared/mapcheck.js"></script>
+  <script src="../shared/mapedit.js"></script>
   <script src="../shared/projectdoc.js"></script>
   <script src="../shared/codecs.js"></script>
   <script src="../shared/conform.js"></script>
