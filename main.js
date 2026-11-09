@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, powerSaveBlocker, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, powerSaveBlocker, Notification, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -9,6 +9,10 @@ const ExportPlan = require('./src/shared/exportplan');
 const Files = require('./src/main/output-files');
 const Store = require('./src/main/file-store');
 const Outputs = require('./src/shared/outputs');
+const AppInfo = require('./src/shared/appinfo');
+const Maintenance = require('./src/main/app-info');
+const ExportLog = require('./src/main/export-log');
+const APP_VERSION = require('./package.json').version; // also right when started through another entry script
 
 app.setName('XtremeLED Remap Export');
 // Desktop tool: allow the preview player to start programmatically (spacebar/UI)
@@ -51,8 +55,21 @@ function buildMenu() {
       ],
     },
     { role: 'windowMenu' },
+    {
+      label: 'Help',
+      submenu: [
+        { label: `About ${app.getName()}`, click: () => sendMenu('about') },
+        { label: 'Open-source licenses', click: () => sendMenu('licenses') },
+        { type: 'separator' },
+        { label: 'Copy diagnostics', click: () => sendMenu('diagnostics') },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function sendMenu(action) {
+  if (win && !win.isDestroyed()) win.webContents.send('app:menu', action);
 }
 
 let win = null;
@@ -64,6 +81,19 @@ const makeVideoArg = process.argv.find((a) => a.startsWith('--makevideo='));
 const shootArg = process.argv.find((a) => a.startsWith('--shoot='));
 const makeTutArg = process.argv.find((a) => a.startsWith('--maketut='));
 const e2eArg = process.argv.find((a) => a.startsWith('--e2e='));
+
+// One copy at a time: a second one would run its own autosave and watch folder next to the
+// first. Only for the installed app; development runs and tool modes come and go side by side.
+const toolMode = [screenshotArg, makeIconArg, makeHeroArg, makePosterArg, makeVideoArg, shootArg, makeTutArg, e2eArg].some(Boolean);
+const wantsSingleInstance = !toolMode && (app.isPackaged || process.env.XRE_SINGLE_INSTANCE === '1');
+const isSecondCopy = wantsSingleInstance && !app.requestSingleInstanceLock();
+if (isSecondCopy) app.quit();
+app.on('second-instance', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
 
 // E2E test mode: load the real app (all IPC handlers live) and run a page-side script.
 // The script runs as an async body; its return value is printed as E2E RESULT.
@@ -368,6 +398,46 @@ function confirmClose(e, target) {
   });
 }
 
+// The window died, the program didn't. An export still running has no page left to report to,
+// and a reloaded page would look idle next to it, so it stops first. The work comes back
+// from the autosave.
+const logDir = () => path.join(app.getPath('userData'), 'logs');
+let crashTimes = [];
+let recoveringCrash = false;
+async function recoverFromCrash(target, details) {
+  if (details.reason === 'clean-exit' || recoveringCrash || target.isDestroyed()) return;
+  recoveringCrash = true;
+  try {
+    ExportLog.appendCrash(logDir(), `window process gone: ${details.reason} (exit code ${details.exitCode})`);
+    const wasExporting = renderMod.isBusy();
+    if (wasExporting) {
+      renderMod.cancel();
+      await renderMod.whenIdle();
+    }
+    const step = Maintenance.crashAction(crashTimes, Date.now(), 60000, 2);
+    crashTimes = step.recent;
+    const detail = wasExporting
+      ? 'The running export was stopped. Finished files are kept. Your mapping comes back from the autosave.'
+      : 'Your mapping comes back from the autosave.';
+    const { response } = await dialog.showMessageBox(target, {
+      type: 'error',
+      message: 'The app window stopped unexpectedly.',
+      detail: step.ask ? `${detail}\n\nThis has now happened several times in a row.` : detail,
+      buttons: step.ask ? ['Close the app', 'Try again'] : ['Continue'],
+      defaultId: step.ask ? 1 : 0,
+      cancelId: step.ask ? 0 : 0,
+    });
+    if (step.ask && response === 0) {
+      closeConfirmed = true;
+      if (!target.isDestroyed()) target.close();
+      return;
+    }
+    if (!target.isDestroyed()) target.webContents.reload();
+  } finally {
+    recoveringCrash = false;
+  }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1560,
@@ -385,6 +455,7 @@ function createWindow() {
 
   const thisWindow = win;
   win.on('close', (e) => confirmClose(e, thisWindow));
+  win.webContents.on('render-process-gone', (e, details) => recoverFromCrash(thisWindow, details));
 
   const pageArg = process.argv.find((a) => a.startsWith('--page='));
   const query = {};
@@ -413,7 +484,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (isSecondCopy) return;
   if (process.platform === 'win32') app.setAppUserModelId('nl.xtremeled.remapexport'); // Windows shows no notifications without it
+  renderMod.setLogging({ dir: logDir(), app: { version: APP_VERSION, platform: process.platform, arch: process.arch } });
   if (makeIconArg) return makeIcon();
   if (makeHeroArg) return makeHero();
   if (makePosterArg) return makePoster();
@@ -429,6 +502,9 @@ app.whenReady().then(() => {
     } catch (e) {
       /* icon optional */
     }
+  }
+  if (process.platform === 'darwin') {
+    app.setAboutPanelOptions({ applicationName: app.getName(), applicationVersion: APP_VERSION, copyright: 'XtremeLED' });
   }
   createWindow();
 });
@@ -537,6 +613,63 @@ ipcMain.handle('shell:openExternal', (e, url) => {
 });
 
 ipcMain.handle('app:paths', () => ({ temp: os.tmpdir(), documents: app.getPath('documents') }));
+
+// ---------------- about, updates, diagnostics ----------------
+// Written by the test run of the build (XRE_BUILD_INFO); absent for a build that ran none
+function readBuildInfo() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+function appFacts() {
+  return {
+    version: APP_VERSION,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: os.release(),
+    packaged: app.isPackaged,
+    buildInfo: readBuildInfo(),
+  };
+}
+
+// The hash of a 200 MB file takes a moment: once per ffmpeg path, off the main thread's back
+const pinChecks = new Map();
+function ffmpegPin() {
+  const caps = renderMod.getCapabilities();
+  const ffPath = caps.proresPath || (caps.entries[0] && caps.entries[0].path) || null;
+  if (!pinChecks.has(ffPath)) pinChecks.set(ffPath, Maintenance.pinStatus(ffPath));
+  return pinChecks.get(ffPath);
+}
+
+ipcMain.handle('app:info', () => appFacts());
+ipcMain.handle('app:ffmpeg-pin', () => ffmpegPin());
+
+ipcMain.handle('app:licenses', () => {
+  const dirs = [path.join(process.resourcesPath || '', 'licenses'), path.join(__dirname, 'licenses')];
+  const dir = dirs.find((d) => fs.existsSync(path.join(d, 'NOTICE.txt')));
+  if (!dir) return null;
+  const read = (n) => fs.readFileSync(path.join(dir, n), 'utf8');
+  return { notice: read('NOTICE.txt'), gpl: read('FFmpeg-GPLv3.txt') };
+});
+
+ipcMain.handle('app:diagnostics', async () => Maintenance.buildDiagnostics({
+  ...appFacts(),
+  ffmpeg: renderMod.getCapabilities(),
+  pin: await ffmpegPin(),
+  log: ExportLog.latestLog(logDir()),
+}));
+
+// Never during an export; offline and any other trouble count as "no news"
+ipcMain.handle('app:update-check', () => Maintenance.checkForUpdate(APP_VERSION, { isBusy: renderMod.isBusy, fetch: net.fetch.bind(net) }));
+ipcMain.handle('app:open-release', (e, url) => {
+  if (AppInfo.isReleaseUrl(url)) shell.openExternal(url);
+});
 
 // For each folder: can we write there, how much room is left and on which disk.
 ipcMain.handle('output:folders', async (e, dirs) => Promise.all(dirs.map(async (dir) => {

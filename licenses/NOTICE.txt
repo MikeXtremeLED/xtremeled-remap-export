@@ -1,0 +1,32 @@
+XtremeLED Remap Export includes FFmpeg, run as a separate program for all video work.
+
+FFmpeg is licensed under the GNU General Public License version 3 or later. The full
+licence text is in FFmpeg-GPLv3.txt next to this file. These builds are configured with
+--enable-gpl and --enable-version3 and are not "nonfree".
+
+The exact builds, their checksums and their download locations are listed in the
+ffmpeg manifest shipped with the source code (src/main/ffmpeg-manifest.json).
+
+Windows (x64): FFmpeg 8.1.2, full static build by gyan.dev
+  Build:   https://github.com/GyanD/codexffmpeg/releases/tag/8.1.2
+  Source:  https://github.com/FFmpeg/FFmpeg/commit/38b88335f9
+           https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+  Builder: https://www.gyan.dev/ffmpeg/builds/
+
+macOS (Intel): FFmpeg 8.1.2-tessus, static build by evermeet.cx
+  Build and source: https://evermeet.cx/ffmpeg/
+  Library list:     https://evermeet.cx/ffmpeg/info/ffmpeg/8.1.2
+  FFmpeg source:    https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+
+macOS (Apple Silicon): FFmpeg 8.1.2, static build by Martin Riedl
+  Build and source: https://ffmpeg.martin-riedl.de/
+  FFmpeg source:    https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+
+These static builds also contain other open-source libraries, among them x264, x265 and
+Snappy, under their own licences. The builders' pages above list them.
+
+Electron and Chromium come with their own licence files. On Windows they are in the
+installation folder (LICENSE.electron.txt and LICENSES.chromium.html). The macOS app
+does not contain these two files; the same texts are included as LICENSE and
+LICENSES.chromium.html in the Electron downloads at
+https://github.com/electron/electron/releases

@@ -6,11 +6,16 @@
   "author": "XtremeLED",
   "license": "UNLICENSED",
   "main": "main.js",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
+    "prestart": "node tools/check-install.js",
     "start": "electron .",
     "test": "node test/run-tests.js",
     "screenshot": "electron . --screenshot=/tmp/xre-screenshot.png",
-    "postinstall": "node tools/patch-electron-name.js"
+    "fetch-ffmpeg": "node tools/fetch-ffmpeg.js",
+    "postinstall": "node tools/patch-electron-name.js && node tools/check-install.js"
   },
   "devDependencies": {
     "electron": "^31.7.0",
@@ -31,6 +36,8 @@
       "!docs/**",
       "!dist/**",
       "!tools/**",
+      "!licenses/**",
+      "!.github/**",
       "!*.command",
       "!node_modules/ffmpeg-static/**",
       "!bin/**"
@@ -55,6 +62,10 @@
         {
           "from": "bin/ffmpeg-dxv/ffmpeg-arm64",
           "to": "bin/ffmpeg-dxv/ffmpeg-arm64"
+        },
+        {
+          "from": "licenses",
+          "to": "licenses"
         }
       ]
     },
@@ -72,6 +83,10 @@
         {
           "from": "bin/ffmpeg-dxv/ffmpeg-win64.exe",
           "to": "bin/ffmpeg-dxv/ffmpeg-win64.exe"
+        },
+        {
+          "from": "licenses",
+          "to": "licenses"
         }
       ]
     },

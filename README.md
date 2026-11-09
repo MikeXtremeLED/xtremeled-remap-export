@@ -174,9 +174,10 @@ Both do the same thing — remove the download block. You only need to do this o
 ```bash
 git clone https://github.com/MikeXtremeLED/xtremeled-remap-export.git
 cd xtremeled-remap-export
-npm install
+npm install        # use Node 22 (.nvmrc): on other versions Electron can install incompletely
+npm run fetch-ffmpeg   # Windows only, once: the pinned ffmpeg (SHA-256 checked, not in git)
 npm start          # run the app
-npm test           # geometry / XML / CSV / render test suite (45 checks with real ffmpeg renders)
+npm test           # geometry / XML / CSV / render test suite (real ffmpeg renders, pixel checks)
 ```
 
 ### Build installers
@@ -186,9 +187,12 @@ npm test           # geometry / XML / CSV / render test suite (45 checks with re
 npx electron-builder --mac --x64 --arm64
 
 # Windows (cross-build works from macOS/Linux)
-./tools/fetch-ffmpeg-win.sh     # one-time: downloads the Windows ffmpeg (149 MB, not in git)
+node tools/fetch-ffmpeg.js --platform=win32-x64   # one-time: the pinned ffmpeg, not in git
 npx electron-builder --win --x64
 ```
+
+Releases: bump `version` in package.json, commit, push a tag `vX.Y.Z`. GitHub Actions runs the
+tests on Windows and macOS and leaves unsigned installers in a **draft** release to publish by hand.
 
 ## Notes
 
@@ -208,4 +212,4 @@ If it saved you a media server rental (or just some stress on a show), you can
 
 Concept & field testing: **Mike — XtremeLED** ([xtremeled.nl](https://www.xtremeled.nl/)) ·
 Engineering: built with **Claude** (Anthropic) ·
-Rendering: [FFmpeg](https://ffmpeg.org/) (bundled builds by evermeet.cx, Martin Riedl and BtbN)
+Rendering: [FFmpeg](https://ffmpeg.org/) (bundled builds by gyan.dev, evermeet.cx and Martin Riedl)

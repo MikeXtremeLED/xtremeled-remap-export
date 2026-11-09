@@ -429,7 +429,7 @@ function refreshDocBar() {
   name.textContent = docLabel();
   name.title = docFile.path || 'Not saved to a file yet';
   $('proj-dot').classList.toggle('hidden', !dirty);
-  document.title = `${docLabel()}${dirty ? ' •' : ''} - XtremeLED Remap Export`;
+  document.title = `${docLabel()}${dirty ? ' •' : ''} - XtremeLED Remap Export${appFacts ? ` ${appFacts.version}` : ''}`;
 }
 function loadLocal() {
   try {
@@ -489,7 +489,7 @@ async function restoreStoredRefs() {
 let lastCanvasSize = { w: 0, h: 0 };
 function resizeCanvas() {
   const rect = canvas.parentElement.getBoundingClientRect();
-  const statusH = ($('statusbar') ? $('statusbar').offsetHeight : 24) + $('map-checkbar').offsetHeight;
+  const statusH = ($('statusbar') ? $('statusbar').offsetHeight : 24) + $('map-checkbar').offsetHeight + $('update-notice').offsetHeight;
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.max(50, rect.width);
   const ch = Math.max(50, rect.height - statusH);
@@ -1580,16 +1580,123 @@ function refreshRefPanel() {
   $('ref-opacity').value = Math.round(((ref && ref.opacity) != null ? ref.opacity : 0.6) * 100);
 }
 
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 function refreshEngineInfo() {
   const el = $('ffmpeg-info');
+  if (appFacts) $('ab-name').textContent = `XtremeLED Remap Export ${appFacts.version}`;
   if (!caps || !caps.entries || !caps.entries.length) {
     el.innerHTML = 'ffmpeg not found';
     return;
   }
-  const main = caps.entries[0];
+  const main = caps.entries.find((x) => x.path === caps.proresPath) || caps.entries[0];
+  const line = (info) => `<div class="ab-line">${info.ok ? '<span class="ok">✓</span>' : ''}<span class="${info.ok ? 'val' : ''}">${escapeHtml(info.text)}</span></div>`;
   const tag = (okFlag, name) =>
     okFlag ? `<span style="color:#f7941e">${name} ✓</span>` : `${name} ✗`;
-  el.innerHTML = `ffmpeg ${main.version}<br>ProRes ✓ · ${tag(caps.hasDxv, 'DXV3')} · ${tag(caps.hasHap, 'HAP')} · ${tag(caps.hasX265, 'HEVC')}`;
+  el.innerHTML = line(AppInfo.pinLine(main.version, ffmpegPinState))
+    + line(AppInfo.testsLine(appFacts && appFacts.buildInfo))
+    + `<div>ProRes ✓ · ${tag(caps.hasDxv, 'DXV3')} · ${tag(caps.hasHap, 'HAP')} · ${tag(caps.hasX265, 'HEVC')}</div>`;
+}
+
+// ---------------- about, licenses, updates ----------------
+const UPDATE_DISMISSED_KEY = 'xre:update-dismissed';
+const UPDATE_CHECK_DELAY_MS = 8000;
+const UPDATE_RETRY_MS = 5 * 60 * 1000;
+let appFacts = null;
+let ffmpegPinState = null;
+let updateInfo = null;
+
+function updateDismissed(version) {
+  try {
+    return localStorage.getItem(UPDATE_DISMISSED_KEY) === version;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Stays away during an export; what arrived meanwhile shows once the export is over
+function refreshUpdateNotice() {
+  const show = !!updateInfo && !rp.running && !updateDismissed(updateInfo.version);
+  const box = $('update-notice');
+  if (show === !box.classList.contains('hidden')) return;
+  box.classList.toggle('hidden', !show);
+  if (show) $('update-text').textContent = `Version ${updateInfo.version} is available`;
+  if (page === 'editor') {
+    resizeCanvas();
+    draw();
+  }
+}
+
+async function checkForUpdate() {
+  if (rp.running) {
+    setTimeout(checkForUpdate, UPDATE_RETRY_MS);
+    return;
+  }
+  updateInfo = await api.checkForUpdate().catch(() => null);
+  refreshUpdateNotice();
+}
+
+async function showLicenses() {
+  const texts = await api.licenses().catch(() => null);
+  openModal(`
+    <div class="modal" style="width:680px">
+      <div class="modal-head"><span>Open-source licenses</span><button class="close-x" id="m-close">✕</button></div>
+      <div class="modal-body"><pre class="lic-text" id="m-lic"></pre></div>
+      <div class="modal-foot"><button id="m-ok">Close</button></div>
+    </div>`);
+  $('m-lic').textContent = texts ? `${texts.notice}\n\n${'-'.repeat(72)}\n\n${texts.gpl}` : 'The license files are missing from this installation.';
+  $('m-close').onclick = closeModal;
+  $('m-ok').onclick = closeModal;
+}
+
+async function copyDiagnostics(button) {
+  const text = await api.diagnostics();
+  await api.copyText(text);
+  if (!button) return;
+  const before = button.textContent;
+  button.textContent = 'Copied';
+  setTimeout(() => { button.textContent = before; }, 1600);
+}
+
+async function showAbout() {
+  const f = appFacts || (await api.appInfo());
+  const pin = caps && caps.entries && caps.entries.length ? AppInfo.pinLine((caps.entries.find((x) => x.path === caps.proresPath) || caps.entries[0]).version, ffmpegPinState).text : 'ffmpeg not found';
+  const row = (k, v) => `<div><span class="dim">${k}</span>${escapeHtml(v)}</div>`;
+  openModal(`
+    <div class="modal" style="width:460px">
+      <div class="modal-head"><span>About XtremeLED Remap Export</span><button class="close-x" id="m-close">✕</button></div>
+      <div class="modal-body about-rows">
+        ${row('Version', f.version)}
+        ${row('Rendering', pin)}
+        ${row('Tests', AppInfo.testsLine(f.buildInfo).text.replace(/^Tests: /, ''))}
+        ${row('Electron', f.electron)}
+        ${row('System', `${f.platform} ${f.arch}`)}
+        ${row('Made by', 'XtremeLED')}
+      </div>
+      <div class="modal-foot">
+        <button id="m-diag">Copy diagnostics</button>
+        <button id="m-lic-open">Open-source licenses</button>
+        <button id="m-ok" class="accent">Close</button>
+      </div>
+    </div>`);
+  $('m-close').onclick = closeModal;
+  $('m-ok').onclick = closeModal;
+  $('m-diag').onclick = () => copyDiagnostics($('m-diag'));
+  $('m-lic-open').onclick = () => showLicenses();
+}
+
+function handleMenu(action) {
+  if (action === 'diagnostics') {
+    copyDiagnostics(null);
+    return;
+  }
+  // The app menu stays clickable behind a dialog, and an export may be waiting on that dialog's
+  // answer: opening another one over it would leave the export hanging until a restart.
+  if (modalOpen()) return;
+  if (action === 'about') showAbout();
+  else if (action === 'licenses') showLicenses();
 }
 
 function refreshAll() {
@@ -4662,11 +4769,13 @@ async function startRender(filesOverride, optsOverride) {
   if (rp.running) return;
   rp.running = true;
   updateStartButton();
+  refreshUpdateNotice();
   try {
     await runExport(filesOverride, optsOverride);
   } finally {
     rp.running = false;
     updateStartButton();
+    refreshUpdateNotice();
     $('rp-add').disabled = false;
     api.setTaskbarProgress(-1);
     processWatchQueue();
@@ -4771,58 +4880,25 @@ async function runExport(filesOverride, optsOverride) {
 
   if (!(await checkBeforeExport(files, !!filesOverride, startNotes))) return;
 
-  const targets = []; // {proj, screen, suffix}
-  if (outMode === 'separate' || outMode === 'both') {
-    for (const scr of project.screens) {
-      targets.push({
-        proj: null, // use main project
-        screen: scr,
-        suffix: project.screens.length > 1 ? `_${sanitizeName(scr.name)}` : '',
-      });
-    }
-  }
-  if (outMode === 'merged' || outMode === 'both') {
-    const merged = buildMergedProject();
-    targets.push({ proj: merged, screen: merged.screens[0], suffix: '_merged' });
-  }
-
-  const jobs = [];
-  for (const tgt of targets) {
-    const projForJob = tgt.proj || null;
-    const projUsed = projForJob || project;
-    const maskFiles = await buildMaskFiles(projUsed, tgt.screen.id);
-    const fit = Codecs.fitOutputSize(codecId, tgt.screen.width, tgt.screen.height, { gpu });
-    const OW = fit.width;
-    const OH = fit.height;
-    for (const f of files) {
-      const pp = await api.pathParse(f.path);
-      const dest = outputFolderFor(f);
-      const stem = ExportPlan.outputStem(clipStem(f, pp), codecId, alpha, OW, OH, tgt.suffix);
-      let outPath, outDir = null;
-      if (def.sequence) {
-        outDir = await api.pathJoin(dest, stem + '_seq');
-        outPath = await api.pathJoin(outDir, 'frame_%05d.png');
-      } else {
-        outPath = await api.pathJoin(dest, `${stem}.${def.ext}`);
-      }
-      jobs.push({
-        src: f.path,
-        isImage: f.isImage,
-        outPath,
-        outDir,
-        transform: f.transform,
-        inSec: f.inSec,
-        outSec: f.outSec,
-        sequence: f.sequence || null,
-        pngTime: def.still && !def.sequence && !f.isImage ? f.frameTime || f.inSec || 0 : 0,
-        screen: { id: tgt.screen.id, name: tgt.screen.name, width: tgt.screen.width, height: tgt.screen.height },
-        allowPad: fit.rule.strict && rp.padAcceptedKey != null,
-        maskFiles,
-        project: projForJob || undefined,
-        label: targets.length > 1 || project.screens.length > 1 ? `${clipLabel(f)} → ${tgt.screen.name}` : clipLabel(f),
-      });
-    }
-  }
+  const jobs = await ExportPlan.buildJobs({
+    project,
+    merged: outMode === 'merged' || outMode === 'both' ? buildMergedProject() : null,
+    outMode,
+    files,
+    codecId,
+    codecDef: def,
+    alpha,
+    padAccepted: rp.padAcceptedKey != null,
+  }, {
+    fitSize: (screen) => Codecs.fitOutputSize(codecId, screen.width, screen.height, { gpu }),
+    maskFilesFor: buildMaskFiles,
+    pathParse: api.pathParse,
+    pathJoin: api.pathJoin,
+    folderFor: outputFolderFor,
+    stemFor: clipStem,
+    labelFor: clipLabel,
+    sanitizeName,
+  });
 
   const plan = await resolveExisting(jobs, !!filesOverride);
   if (!plan) return;
@@ -6278,12 +6354,32 @@ window.addEventListener('DOMContentLoaded', async () => {
   refreshDocBar();
   if (!demo) api.refPrune(ProjectDoc.refKeys(project)).catch(() => { /* tried on the next start */ });
 
+  api.onMenu(handleMenu);
+  $('ab-licenses').onclick = showLicenses;
+  $('ab-diagnostics').onclick = () => copyDiagnostics($('ab-diagnostics'));
+  $('update-view').onclick = () => { if (updateInfo) api.openRelease(updateInfo.url); };
+  $('update-close').onclick = () => {
+    try { if (updateInfo) localStorage.setItem(UPDATE_DISMISSED_KEY, updateInfo.version); } catch (e) { /* shows again next start */ }
+    updateInfo = null;
+    refreshUpdateNotice();
+  };
+
   try {
     caps = await api.ffmpegCaps();
   } catch (e) {
     caps = null;
   }
+  appFacts = await api.appInfo().catch(() => null);
+  refreshDocBar();
   refreshEngineInfo();
+  api.ffmpegPin().then((pin) => {
+    ffmpegPinState = pin;
+    refreshEngineInfo();
+  }).catch(() => {
+    ffmpegPinState = { state: 'unknown' };
+    refreshEngineInfo();
+  });
+  if (!demo) setTimeout(checkForUpdate, UPDATE_CHECK_DELAY_MS);
   buildCodecSelect();
   refreshCodecUI();
   // Tests the graphics card encoders in the background; the checkbox waits for the result
@@ -6331,6 +6427,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       rpCheck: () => setPreviewTab('check'),
       checkState: () => ({ result: ck.result, running: ck.running, seam: ck.seam, selected: ck.selected, message: ck.message }),
       nextSeam: () => ckNextSeam(),
+      showUpdateNotice: (version, url) => {
+        updateInfo = { version, url: url || AppInfo.RELEASES_PAGE };
+        refreshUpdateNotice();
+      },
+      showAbout: () => showAbout(),
+      showLicenses: () => showLicenses(),
       addScanned: (paths) => addScanned(paths, { select: true }),
       addPlayerTest: () => addPlayerTest(),
       setRate: (v) => { $('r-rate').value = v; refreshCodecUI(); },

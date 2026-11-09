@@ -12,6 +12,7 @@ const { explainError, checkOutputDir } = require('./errors');
 const Outputs = require('../shared/outputs');
 const Conform = require('../shared/conform');
 const Files = require('./output-files');
+const ExportLog = require('./export-log');
 
 // Bundled ffmpeg 8.x with DXV/HAP/x265 encoders (bin/ffmpeg-dxv/ffmpeg-<arch>).
 // Native binary per architecture: Intel (x64), Apple Silicon (arm64), Windows (win64).
@@ -39,6 +40,11 @@ let cancelled = false;
 let batchActive = false;
 let idleWaiters = [];
 let capsCache = null;
+let logSettings = null; // {dir, app}: where each export writes its log
+
+function setLogging(settings) {
+  logSettings = settings;
+}
 
 function candidateFfmpegs() {
   const list = [];
@@ -698,7 +704,9 @@ function buildArgs(project, job, opts, probe) {
 
 function runFfmpeg(ffPath, args, durationSec, onProgress, options) {
   const outsideBatch = !!(options && options.outsideBatch);
+  const log = options && options.log;
   return new Promise((resolve, reject) => {
+    if (log) log.command(ffPath, args);
     const proc = spawn(ffPath, args);
     activeProcs.add(proc);
     let stderrTail = '';
@@ -706,6 +714,7 @@ function runFfmpeg(ffPath, args, durationSec, onProgress, options) {
 
     proc.stderr.on('data', (d) => {
       stderrTail = (stderrTail + d.toString()).slice(-4000);
+      if (log) log.stderr(d);
     });
     proc.stdout.on('data', (d) => {
       stdoutBuf += d.toString();
@@ -722,10 +731,12 @@ function runFfmpeg(ffPath, args, durationSec, onProgress, options) {
     });
     proc.on('error', (err) => {
       activeProcs.delete(proc);
+      if (log) log.line(`Could not start ffmpeg: ${err.message}`);
       reject(err);
     });
     proc.on('close', (code) => {
       activeProcs.delete(proc);
+      if (log) log.endCommand(code);
       // The cancel flag belongs to the batch; a job outside it is only cancelled by being killed
       if (outsideBatch ? code === null : cancelled) return reject(new Error('Cancelled'));
       if (code === 0) return resolve();
@@ -824,6 +835,12 @@ async function runBatch(win, payload) {
   const ffPath = ffmpegForCodec(codec);
   stopFrameCheck(); // an export gets the whole machine
   if (!ffPath) throw new Error('No ffmpeg found for this codec');
+  const ffEntry = getCapabilities().entries.find((e) => e.path === ffPath);
+  const log = ExportLog.begin(logSettings, {
+    ffmpeg: `${ffEntry ? ffEntry.version : '?'} at ${ffPath}`,
+    Settings: JSON.stringify({ codec, alpha, depth, bitrateMbps, fps, outFps, imageDuration, gpu: !!gpu, existingPolicy: payload.existingPolicy || null }),
+    Clips: jobs.length,
+  });
 
   // Only an encoder that passed its test on this machine; otherwise the processor does it.
   const gpuChoice = gpu ? Codecs.gpuFor(await detectGpu(), codec, depth) : null;
@@ -844,8 +861,10 @@ async function runBatch(win, payload) {
     const job = jobs[i];
     const project = job.project || payload.project;
     send(win, { type: 'job-start', index: i, total: jobs.length, file: job.src, label: job.label });
+    log.line(`--- Clip ${i + 1} of ${jobs.length}: ${job.src}\nOutput: ${job.outDir || job.outPath}`);
     const folderProblem = folderProblems.get(destOf(job));
     if (folderProblem) {
+      log.line(`Failed: ${folderProblem.message}`);
       results.push({ src: job.src, ok: false, error: folderProblem.message, detail: folderProblem.detail });
       send(win, { type: 'job-error', index: i, total: jobs.length, error: folderProblem.message, detail: folderProblem.detail, label: job.label });
       continue;
@@ -880,7 +899,7 @@ async function runBatch(win, payload) {
         paddedTo = built.paddedTo;
         expect = built.expect;
         for (const note of built.notes) send(win, { type: 'job-note', index: i, total: jobs.length, note: `${job.label ? job.label + ': ' : ''}${note}`, label: job.label });
-        await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
+        await runFfmpeg(ffPath, built.args, built.durationSec, onPct, { log });
       } catch (gpuErr) {
         // Back to the processor only when the graphics card encoder itself failed
         if (!gpuChoice || cancelled || !Codecs.isGpuFailure(gpuErr && gpuErr.message, gpuChoice.id)) throw gpuErr;
@@ -888,7 +907,8 @@ async function runBatch(win, payload) {
         const built = buildArgs(project, workJob, { ...opts, gpu: false, gpuFamily: null, gpuEncoder: null, keepGpuSize: true }, probe);
         paddedTo = built.paddedTo;
         expect = built.expect;
-        await runFfmpeg(ffPath, built.args, built.durationSec, onPct);
+        log.line(`${gpuChoice.label} failed on this clip, finishing on the processor.`);
+        await runFfmpeg(ffPath, built.args, built.durationSec, onPct, { log });
       }
       // PNG has no container metadata — stamp the tEXt chunk into the file(s)
       if (codec === 'png') {
@@ -913,6 +933,7 @@ async function runBatch(win, payload) {
       partial = null;
       const savedAs = target === requested ? null : path.basename(target);
       results.push({ src: job.src, out: target, ok: true, paddedTo, check, savedAs });
+      log.line(`Done: ${target}${check.warnings && check.warnings.length ? ` (warnings: ${check.warnings.join('; ')})` : ''}`);
       send(win, { type: 'job-done', index: i, total: jobs.length, out: target, label: job.label, paddedTo, check, savedAs });
     } catch (err) {
       if (partial && !(err && err.keepPartial)) {
@@ -927,10 +948,13 @@ async function runBatch(win, payload) {
         ...(err && err.ffmpegArgs ? ['', `Command: ffmpeg ${err.ffmpegArgs.join(' ')}`] : []),
       ].join('\n');
       results.push({ src: job.src, ok: false, error: info.message, detail });
+      log.line(`Failed: ${info.message}${info.detail ? `\n${info.detail}` : ''}`);
       send(win, { type: 'job-error', index: i, total: jobs.length, error: info.message, detail, label: job.label });
       if (cancelled) break;
     }
   }
+  if (cancelled) log.line('Export cancelled.');
+  log.finish(results);
   send(win, { type: 'batch-done', cancelled, results, total: jobs.length });
   return results;
 }
@@ -1216,6 +1240,7 @@ function cancel() {
 }
 
 module.exports = {
+  setLogging,
   sampleOutputSize,
   getCapabilities,
   detectGpu,

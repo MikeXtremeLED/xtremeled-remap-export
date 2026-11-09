@@ -604,6 +604,7 @@ fs.unlinkSync(outWav);
   await require('./speed-tests').run(ok, caps.proresPath, tmp);
   await require('./exportplan-tests').run(ok, caps.proresPath, tmp);
   await require('./conform-tests').run(ok, caps.proresPath, tmp);
+  await require('./release-tests').run(ok, caps.proresPath, tmp);
 
   fs.rmSync(workDir, { recursive: true, force: true });
   try { fs.unlinkSync(stillSrc); } catch (e) { /* gone */ }
@@ -614,6 +615,10 @@ fs.unlinkSync(outWav);
   fs.rmSync(seqDir, { recursive: true, force: true });
 
   console.log(`\nALL ${passed} CHECKS PASSED`);
+  // The About card reads this: a build only shows a test result it really had
+  if (process.env.XRE_BUILD_INFO) {
+    fs.writeFileSync(path.join(__dirname, '..', process.env.XRE_BUILD_INFO), JSON.stringify({ testsPassed: passed, at: new Date().toISOString(), ffmpeg: caps.entries.find((e) => e.path === caps.proresPath).version }));
+  }
 })().catch((e) => {
   console.error('FAILED:', e);
   process.exit(1);

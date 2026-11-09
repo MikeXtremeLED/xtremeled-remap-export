@@ -279,7 +279,61 @@
     return `${size} · ${formatSize(volume.freeBytes)} free${volume.volume ? ` on ${volume.volume}` : ''}`;
   }
 
+  // ---------------- the export jobs ----------------
+  // One job per clip per output. What touches files or the page is passed in as io, so the
+  // same code runs in the app and in the tests.
+  async function buildJobs(input, io) {
+    const { project, merged, outMode, files, codecId, codecDef, alpha, padAccepted } = input;
+    const multiScreen = project.screens.length > 1;
+    const targets = [];
+    if (outMode === 'separate' || outMode === 'both') {
+      for (const screen of project.screens) {
+        targets.push({ proj: null, screen, suffix: multiScreen ? `_${io.sanitizeName(screen.name)}` : '' });
+      }
+    }
+    if (outMode === 'merged' || outMode === 'both') {
+      targets.push({ proj: merged, screen: merged.screens[0], suffix: '_merged' });
+    }
+
+    const jobs = [];
+    for (const tgt of targets) {
+      const maskFiles = await io.maskFilesFor(tgt.proj || project, tgt.screen.id);
+      const fit = io.fitSize(tgt.screen);
+      for (const f of files) {
+        const pp = await io.pathParse(f.path);
+        const dest = io.folderFor(f);
+        const stem = outputStem(io.stemFor(f, pp), codecId, alpha, fit.width, fit.height, tgt.suffix);
+        let outPath;
+        let outDir = null;
+        if (codecDef.sequence) {
+          outDir = await io.pathJoin(dest, `${stem}_seq`);
+          outPath = await io.pathJoin(outDir, 'frame_%05d.png');
+        } else {
+          outPath = await io.pathJoin(dest, `${stem}.${codecDef.ext}`);
+        }
+        jobs.push({
+          src: f.path,
+          isImage: f.isImage,
+          outPath,
+          outDir,
+          transform: f.transform,
+          inSec: f.inSec,
+          outSec: f.outSec,
+          sequence: f.sequence || null,
+          pngTime: codecDef.still && !codecDef.sequence && !f.isImage ? f.frameTime || f.inSec || 0 : 0,
+          screen: { id: tgt.screen.id, name: tgt.screen.name, width: tgt.screen.width, height: tgt.screen.height },
+          allowPad: !!(fit.rule && fit.rule.strict) && !!padAccepted,
+          maskFiles,
+          project: tgt.proj || undefined,
+          label: targets.length > 1 || multiScreen ? `${io.labelFor(f)} → ${tgt.screen.name}` : io.labelFor(f),
+        });
+      }
+    }
+    return jobs;
+  }
+
   return {
+    buildJobs,
     TARGETS, targetForCodec, defaultCodec, normalizeSettings, resolveSettings,
     isInsideFolder, folderOf, outputFolder, stemOf, outputStem, volumeLabel,
     splitMiddle, formatClock, trimmedSeconds, isTrimmed, clipStatus, outputCounts, plural,

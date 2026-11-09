@@ -116,6 +116,13 @@
       </aside>
 
       <div id="center">
+        <div id="update-notice" class="hidden">
+          <span class="dot"></span>
+          <span id="update-text"></span>
+          <span class="sep">·</span>
+          <button id="update-view" class="ab-link">View</button>
+          <button id="update-close" class="close-x" title="Dismiss">✕</button>
+        </div>
         <div id="map-checkbar"></div>
         <canvas id="editor"></canvas>
         <div id="mask-bar" class="hidden">MASK: Esc to stop</div>
@@ -208,9 +215,16 @@
           </div>
         </div>
 
-        <div class="section">
-          <div class="panel-title">Engine</div>
-          <div id="ffmpeg-info" class="dim">ffmpeg: searching…</div>
+        <div class="section" id="about-section">
+          <div class="panel-title">About this version</div>
+          <div class="ab-name" id="ab-name">XtremeLED Remap Export</div>
+          <div class="clip-info ab-card">
+            <div id="ffmpeg-info" class="dim">ffmpeg: searching…</div>
+          </div>
+          <div class="ab-links">
+            <button id="ab-licenses" class="ab-link" title="Show the licence texts of the bundled components">Open-source licenses</button>
+            <button id="ab-diagnostics" class="ab-link" title="Copy version details and the last export log to the clipboard">Copy diagnostics</button>
+          </div>
         </div>
       </aside>
     </div>
@@ -468,6 +482,7 @@
   <script src="../shared/projectdoc.js"></script>
   <script src="../shared/codecs.js"></script>
   <script src="../shared/conform.js"></script>
+  <script src="../shared/appinfo.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

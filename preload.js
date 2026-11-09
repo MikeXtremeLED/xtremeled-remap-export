@@ -40,6 +40,15 @@ contextBridge.exposeInMainWorld('xre', {
   estimateSample: (payload) => ipcRenderer.invoke('estimate:sample', payload),
   outputFolders: (dirs) => ipcRenderer.invoke('output:folders', dirs),
   appPaths: () => ipcRenderer.invoke('app:paths'),
+  appInfo: () => ipcRenderer.invoke('app:info'),
+  ffmpegPin: () => ipcRenderer.invoke('app:ffmpeg-pin'),
+  licenses: () => ipcRenderer.invoke('app:licenses'),
+  diagnostics: () => ipcRenderer.invoke('app:diagnostics'),
+  checkForUpdate: () => ipcRenderer.invoke('app:update-check'),
+  openRelease: (url) => ipcRenderer.invoke('app:open-release', url),
+  onMenu: (cb) => {
+    ipcRenderer.on('app:menu', (e, action) => cb(action));
+  },
   openFolder: (dir) => ipcRenderer.invoke('shell:openFolder', dir),
   setTaskbarProgress: (fraction) => ipcRenderer.send('app:taskbar-progress', fraction),
   notifyExportDone: (notice) => ipcRenderer.send('app:export-notice', notice),
