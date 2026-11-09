@@ -18,7 +18,7 @@
     "postinstall": "node tools/patch-electron-name.js && node tools/check-install.js"
   },
   "devDependencies": {
-    "electron": "^31.7.0",
+    "electron": "^43.8.7",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
@@ -96,7 +96,7 @@
     }
   },
   "allowScripts": {
-    "electron@31.7.7": true,
+    "electron@43.8.7": true,
     "ffmpeg-static@5.3.0": true,
     "electron-winstaller@5.4.0": true
   }
