@@ -1,9 +1,18 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, powerSaveBlocker, Notification, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const renderMod = require('./src/main/render');
+const { checkOutputDir } = require('./src/main/errors');
+const ExportPlan = require('./src/shared/exportplan');
+const Files = require('./src/main/output-files');
+const Store = require('./src/main/file-store');
+const Outputs = require('./src/shared/outputs');
+const AppInfo = require('./src/shared/appinfo');
+const Maintenance = require('./src/main/app-info');
+const ExportLog = require('./src/main/export-log');
+const APP_VERSION = require('./package.json').version; // also right when started through another entry script
 
 app.setName('XtremeLED Remap Export');
 // Desktop tool: allow the preview player to start programmatically (spacebar/UI)
@@ -46,8 +55,21 @@ function buildMenu() {
       ],
     },
     { role: 'windowMenu' },
+    {
+      label: 'Help',
+      submenu: [
+        { label: `About ${app.getName()}`, click: () => sendMenu('about') },
+        { label: 'Open-source licenses', click: () => sendMenu('licenses') },
+        { type: 'separator' },
+        { label: 'Copy diagnostics', click: () => sendMenu('diagnostics') },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function sendMenu(action) {
+  if (win && !win.isDestroyed()) win.webContents.send('app:menu', action);
 }
 
 let win = null;
@@ -60,6 +82,19 @@ const shootArg = process.argv.find((a) => a.startsWith('--shoot='));
 const makeTutArg = process.argv.find((a) => a.startsWith('--maketut='));
 const e2eArg = process.argv.find((a) => a.startsWith('--e2e='));
 
+// One copy at a time: a second one would run its own autosave and watch folder next to the
+// first. Only for the installed app; development runs and tool modes come and go side by side.
+const toolMode = [screenshotArg, makeIconArg, makeHeroArg, makePosterArg, makeVideoArg, shootArg, makeTutArg, e2eArg].some(Boolean);
+const wantsSingleInstance = !toolMode && (app.isPackaged || process.env.XRE_SINGLE_INSTANCE === '1');
+const isSecondCopy = wantsSingleInstance && !app.requestSingleInstanceLock();
+if (isSecondCopy) app.quit();
+app.on('second-instance', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
 // E2E test mode: load the real app (all IPC handlers live) and run a page-side script.
 // The script runs as an async body; its return value is printed as E2E RESULT.
 function runE2E() {
@@ -68,7 +103,7 @@ function runE2E() {
     width: 1600,
     height: 1000,
     show: process.env.E2E_SHOW === '1',
-    backgroundColor: '#1d2022',
+    backgroundColor: '#121416',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -131,7 +166,7 @@ function shootTutorial() {
     width: 1600,
     height: 1000,
     show: false,
-    backgroundColor: '#1d2022',
+    backgroundColor: '#121416',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -173,6 +208,7 @@ function shootTutorial() {
     }
     await wait(500);
     await js('window.__demoApi.rpInput()');
+    await js('window.__demoApi.openPanels()'); // the tutorial points at settings inside the folded sections
     await wait(400);
     await shot('export-input');
     rects.export = await js('window.__demoApi.rects()');
@@ -306,13 +342,109 @@ function makeIcon() {
   });
 }
 
+// Asks the page whether it may close (it asks about unsaved work itself). A page that does
+// not even answer "asking" in time has hung or crashed: it can't save anything, so close.
+function pageAllowsClose(target) {
+  const wc = target.webContents;
+  if (wc.isDestroyed() || wc.isCrashed()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (answer) => {
+      clearTimeout(noAnswer);
+      ipcMain.removeListener('app:close-answer', onAnswer);
+      resolve(answer);
+    };
+    const onAnswer = (e, answer) => {
+      if (e.sender !== wc) return;
+      if (answer === 'asking') clearTimeout(noAnswer);
+      else finish(answer === true);
+    };
+    const noAnswer = setTimeout(() => finish(true), 5000);
+    ipcMain.on('app:close-answer', onAnswer);
+    wc.send('app:close-request');
+  });
+}
+
+async function closeSteps(target) {
+  if (!(await pageAllowsClose(target))) return;
+  if (renderMod.isBusy()) {
+    // Not a sync dialog: ffmpeg keeps running behind it. "Stop" lets ffmpeg stop and the
+    // temporary files go before the window really closes.
+    const { response } = await dialog.showMessageBox(target, {
+      type: 'warning',
+      message: 'An export is still running.',
+      detail: 'Stop it and close the app? The file being exported is removed; finished files are kept.',
+      buttons: ['Keep exporting', 'Stop and close'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (response !== 1) return;
+    renderMod.cancel();
+    await renderMod.whenIdle();
+  }
+  closeConfirmed = true;
+  if (!target.isDestroyed()) target.close();
+}
+
+// Unsaved work is asked about first: answering it never stops an export that then keeps running.
+let closeAsking = false;
+let closeConfirmed = false;
+function confirmClose(e, target) {
+  if (closeConfirmed) return;
+  e.preventDefault();
+  if (closeAsking) return;
+  closeAsking = true;
+  closeSteps(target).finally(() => {
+    closeAsking = false;
+  });
+}
+
+// The window died, the program didn't. An export still running has no page left to report to,
+// and a reloaded page would look idle next to it, so it stops first. The work comes back
+// from the autosave.
+const logDir = () => path.join(app.getPath('userData'), 'logs');
+let crashTimes = [];
+let recoveringCrash = false;
+async function recoverFromCrash(target, details) {
+  if (details.reason === 'clean-exit' || recoveringCrash || target.isDestroyed()) return;
+  recoveringCrash = true;
+  try {
+    ExportLog.appendCrash(logDir(), `window process gone: ${details.reason} (exit code ${details.exitCode})`);
+    const wasExporting = renderMod.isBusy();
+    if (wasExporting) {
+      renderMod.cancel();
+      await renderMod.whenIdle();
+    }
+    const step = Maintenance.crashAction(crashTimes, Date.now(), 60000, 2);
+    crashTimes = step.recent;
+    const detail = wasExporting
+      ? 'The running export was stopped. Finished files are kept. Your mapping comes back from the autosave.'
+      : 'Your mapping comes back from the autosave.';
+    const { response } = await dialog.showMessageBox(target, {
+      type: 'error',
+      message: 'The app window stopped unexpectedly.',
+      detail: step.ask ? `${detail}\n\nThis has now happened several times in a row.` : detail,
+      buttons: step.ask ? ['Close the app', 'Try again'] : ['Continue'],
+      defaultId: step.ask ? 1 : 0,
+      cancelId: step.ask ? 0 : 0,
+    });
+    if (step.ask && response === 0) {
+      closeConfirmed = true;
+      if (!target.isDestroyed()) target.close();
+      return;
+    }
+    if (!target.isDestroyed()) target.webContents.reload();
+  } finally {
+    recoveringCrash = false;
+  }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1560,
     height: 980,
     minWidth: 1100,
     minHeight: 680,
-    backgroundColor: '#1d2022',
+    backgroundColor: '#121416',
     title: 'XtremeLED Remap Export',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -320,6 +452,10 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  const thisWindow = win;
+  win.on('close', (e) => confirmClose(e, thisWindow));
+  win.webContents.on('render-process-gone', (e, details) => recoverFromCrash(thisWindow, details));
 
   const pageArg = process.argv.find((a) => a.startsWith('--page='));
   const query = {};
@@ -348,6 +484,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (isSecondCopy) return;
+  if (process.platform === 'win32') app.setAppUserModelId('nl.xtremeled.remapexport'); // Windows shows no notifications without it
+  renderMod.setLogging({ dir: logDir(), app: { version: APP_VERSION, platform: process.platform, arch: process.arch } });
   if (makeIconArg) return makeIcon();
   if (makeHeroArg) return makeHero();
   if (makePosterArg) return makePoster();
@@ -364,9 +503,13 @@ app.whenReady().then(() => {
       /* icon optional */
     }
   }
+  if (process.platform === 'darwin') {
+    app.setAboutPanelOptions({ applicationName: app.getName(), applicationVersion: APP_VERSION, copyright: 'XtremeLED' });
+  }
   createWindow();
 });
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => renderMod.cancel()); // no ffmpeg left behind, whatever ended the app
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
@@ -398,6 +541,11 @@ ipcMain.handle('dialog:save', async (e, opts = {}) => {
   return res.canceled ? null : res.filePath;
 });
 
+ipcMain.handle('dialog:message', async (e, opts = {}) => {
+  const res = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), opts);
+  return res.response;
+});
+
 ipcMain.handle('file:readText', (e, p) => fs.readFileSync(p, 'utf8'));
 
 ipcMain.handle('file:readDataUrl', (e, p) => {
@@ -416,10 +564,18 @@ ipcMain.handle('file:readDataUrl', (e, p) => {
   return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
 });
 
-ipcMain.handle('file:writeText', (e, p, text) => {
-  fs.writeFileSync(p, text, 'utf8');
+ipcMain.handle('file:writeText', async (e, p, text) => {
+  await Store.writeTextSafely(p, text);
   return true;
 });
+
+ipcMain.handle('file:exists', (e, paths) => Store.filesExist(paths));
+ipcMain.handle('file:findByName', (e, dir, names) => Store.findByName(dir, names));
+
+const refStoreDir = () => path.join(app.getPath('userData'), 'reference-images');
+ipcMain.handle('refs:put', (e, key, dataUrl) => Store.refPut(refStoreDir(), key, dataUrl));
+ipcMain.handle('refs:get', (e, key) => Store.refGet(refStoreDir(), key));
+ipcMain.handle('refs:prune', (e, keepKeys) => Store.refPrune(refStoreDir(), keepKeys));
 
 // Write a dataURL to an arbitrary path (e.g. save test pattern PNG)
 ipcMain.handle('file:writeDataUrl', (e, p, dataUrl) => {
@@ -439,12 +595,112 @@ ipcMain.handle('file:writeTempDataUrl', (e, name, dataUrl) => {
   return p;
 });
 
+ipcMain.handle('clipboard:writeText', (e, text) => clipboard.writeText(String(text)));
+
 ipcMain.handle('shell:showInFolder', (e, p) => {
   shell.showItemInFolder(p);
 });
 
+ipcMain.handle('shell:openFolder', async (e, dir) => {
+  // The path can come from a project file: openPath on a file would launch it
+  if (!fs.statSync(dir).isDirectory()) throw new Error('Not a folder');
+  const problem = await shell.openPath(dir);
+  if (problem) throw new Error(problem);
+});
+
 ipcMain.handle('shell:openExternal', (e, url) => {
   if (/^https?:\/\//.test(url)) shell.openExternal(url);
+});
+
+ipcMain.handle('app:paths', () => ({ temp: os.tmpdir(), documents: app.getPath('documents') }));
+
+// ---------------- about, updates, diagnostics ----------------
+// Written by the test run of the build (XRE_BUILD_INFO); absent for a build that ran none
+function readBuildInfo() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+function appFacts() {
+  return {
+    version: APP_VERSION,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: os.release(),
+    packaged: app.isPackaged,
+    buildInfo: readBuildInfo(),
+  };
+}
+
+// The hash of a 200 MB file takes a moment: once per ffmpeg path, off the main thread's back
+const pinChecks = new Map();
+function ffmpegPin() {
+  const caps = renderMod.getCapabilities();
+  const ffPath = caps.proresPath || (caps.entries[0] && caps.entries[0].path) || null;
+  if (!pinChecks.has(ffPath)) pinChecks.set(ffPath, Maintenance.pinStatus(ffPath));
+  return pinChecks.get(ffPath);
+}
+
+ipcMain.handle('app:info', () => appFacts());
+ipcMain.handle('app:ffmpeg-pin', () => ffmpegPin());
+
+ipcMain.handle('app:licenses', () => {
+  const dirs = [path.join(process.resourcesPath || '', 'licenses'), path.join(__dirname, 'licenses')];
+  const dir = dirs.find((d) => fs.existsSync(path.join(d, 'NOTICE.txt')));
+  if (!dir) return null;
+  const read = (n) => fs.readFileSync(path.join(dir, n), 'utf8');
+  return { notice: read('NOTICE.txt'), gpl: read('FFmpeg-GPLv3.txt') };
+});
+
+ipcMain.handle('app:diagnostics', async () => Maintenance.buildDiagnostics({
+  ...appFacts(),
+  ffmpeg: renderMod.getCapabilities(),
+  pin: await ffmpegPin(),
+  log: ExportLog.latestLog(logDir()),
+}));
+
+// Never during an export; offline and any other trouble count as "no news"
+ipcMain.handle('app:update-check', () => Maintenance.checkForUpdate(APP_VERSION, { isBusy: renderMod.isBusy, fetch: net.fetch.bind(net) }));
+ipcMain.handle('app:open-release', (e, url) => {
+  if (AppInfo.isReleaseUrl(url)) shell.openExternal(url);
+});
+
+// For each folder: can we write there, how much room is left and on which disk.
+ipcMain.handle('output:folders', async (e, dirs) => Promise.all(dirs.map(async (dir) => {
+  const problem = checkOutputDir(dir);
+  let freeBytes = null;
+  try {
+    const st = await fs.promises.statfs(dir);
+    freeBytes = st.bavail * st.bsize;
+  } catch (err) {
+    /* gone or not supported here: the size line then leaves the free space out */
+  }
+  return { dir, problem: problem ? problem.message : null, freeBytes, volume: ExportPlan.volumeLabel(dir, process.platform) };
+})));
+
+ipcMain.on('app:taskbar-progress', (e, fraction) => {
+  const target = BrowserWindow.fromWebContents(e.sender);
+  if (target && !target.isDestroyed()) target.setProgressBar(fraction);
+});
+
+// Only when the app is not in front: the toast is for someone working in another program.
+// Kept in a variable so it is not collected before it can be clicked.
+let exportNotice = null;
+ipcMain.on('app:export-notice', (e, notice) => {
+  const target = BrowserWindow.fromWebContents(e.sender);
+  if (!target || target.isDestroyed() || target.isFocused() || !Notification.isSupported()) return;
+  exportNotice = new Notification({ title: notice.title, body: notice.body });
+  exportNotice.on('click', () => {
+    if (notice.showPath) shell.showItemInFolder(notice.showPath);
+    if (!target.isDestroyed()) target.show();
+  });
+  exportNotice.show();
 });
 
 ipcMain.handle('path:parse', (e, p) => ({
@@ -457,14 +713,29 @@ ipcMain.handle('path:join', (e, ...parts) => path.join(...parts));
 ipcMain.handle('path:toFileUrl', (e, p) => require('url').pathToFileURL(p).href);
 
 ipcMain.handle('ffmpeg:caps', () => renderMod.getCapabilities());
-ipcMain.handle('render:start', (e, payload) => renderMod.startBatch(win, payload));
+ipcMain.handle('ffmpeg:gpu', () => renderMod.detectGpu());
+ipcMain.handle('render:start', async (e, payload) => {
+  const sleepBlock = powerSaveBlocker.start('prevent-app-suspension');
+  try {
+    return await renderMod.startBatch(BrowserWindow.fromWebContents(e.sender), payload);
+  } finally {
+    powerSaveBlocker.stop(sleepBlock);
+    const done = BrowserWindow.fromWebContents(e.sender);
+    if (done && !done.isDestroyed()) done.setProgressBar(-1); // also when the page never got to say so
+  }
+});
 ipcMain.handle('render:cancel', () => renderMod.cancel());
-ipcMain.handle('preview:probe', (e, src) => {
+ipcMain.handle('estimate:sample', (e, payload) => renderMod.sampleOutputSize(payload));
+ipcMain.handle('render:existing', (e, targets) => renderMod.existingOutputs(targets));
+ipcMain.handle('preview:probe', (e, src, sequence) => {
   const caps = renderMod.getCapabilities();
   if (!caps.proresPath) throw new Error('ffmpeg not found');
-  return renderMod.probeMedia(caps.proresPath, src);
+  return renderMod.probeSource(caps.proresPath, src, sequence);
 });
-ipcMain.handle('preview:frame', (e, src, timeSec) => renderMod.extractFrame(src, timeSec || 0));
+ipcMain.handle('preview:frame', (e, src, timeSec, sequence) => renderMod.extractFrame(src, timeSec || 0, sequence));
+ipcMain.handle('check:frame', (e, payload) => renderMod.checkFrame(payload));
+ipcMain.handle('test:player', (e, input) => renderMod.makePlayerTest(BrowserWindow.fromWebContents(e.sender), input));
+ipcMain.handle('footage:scan', (e, paths, mediaExts, keepOtherFiles) => renderMod.scanFootage(paths, mediaExts, keepOtherFiles));
 ipcMain.handle('preview:waveform', (e, src) => {
   try {
     return renderMod.extractWaveform(src);
@@ -479,7 +750,10 @@ const MEDIA_EXTS = new Set([
   'mov', 'mp4', 'm4v', 'avi', 'mkv', 'mxf', 'webm', 'mpg', 'mpeg',
 ]);
 let watcher = null;
-const watchPending = new Map(); // path -> {size, timer}
+const watchPending = new Map(); // path -> {size, mtime, since, timer}
+const WATCH_POLL_MS = 1000;
+const WATCH_STABLE_MS = 5000;
+let watchTarget = null; // the window that started the watch
 
 function stopWatch() {
   if (watcher) {
@@ -490,38 +764,43 @@ function stopWatch() {
   watchPending.clear();
 }
 
-// Wait until the file size is stable (copy finished), then notify the renderer
+// A file counts as arrived once it has not changed for a while and, on Windows, nobody is
+// still writing it: during a copy Windows reports the full size from the start.
 function scheduleStableCheck(fullPath) {
   const check = () => {
-    let size = -1;
+    let st;
     try {
-      size = fs.statSync(fullPath).size;
+      st = fs.statSync(fullPath);
     } catch (e) {
       watchPending.delete(fullPath);
       return;
     }
     const prev = watchPending.get(fullPath);
-    if (prev && prev.size === size && size > 0) {
+    const unchanged = prev && prev.size === st.size && prev.mtime === st.mtimeMs && st.size > 0;
+    const since = unchanged ? prev.since : Date.now();
+    if (unchanged && Date.now() - since >= WATCH_STABLE_MS && !Files.fileIsBusy(fullPath)) {
       watchPending.delete(fullPath);
-      if (win && !win.isDestroyed()) win.webContents.send('watch:file', fullPath);
+      if (watchTarget && !watchTarget.isDestroyed()) watchTarget.webContents.send('watch:file', fullPath);
     } else {
-      watchPending.set(fullPath, { size, timer: setTimeout(check, 900) });
+      watchPending.set(fullPath, { size: st.size, mtime: st.mtimeMs, since, timer: setTimeout(check, WATCH_POLL_MS) });
     }
   };
   const existing = watchPending.get(fullPath);
   if (existing) clearTimeout(existing.timer);
-  watchPending.set(fullPath, { size: -2, timer: setTimeout(check, 900) });
+  watchPending.set(fullPath, { size: -2, mtime: 0, since: 0, timer: setTimeout(check, WATCH_POLL_MS) });
 }
 
 ipcMain.handle('watch:start', (e, dir) => {
   stopWatch();
+  watchTarget = BrowserWindow.fromWebContents(e.sender);
   const existing = new Set(fs.readdirSync(dir));
   watcher = fs.watch(dir, (event, filename) => {
     if (!filename) return;
     const ext = path.extname(filename).toLowerCase().replace('.', '');
     if (!MEDIA_EXTS.has(ext)) return;
-    if (filename.startsWith('.')) return;
+    if (filename.startsWith('.') || Outputs.isTempName(filename)) return;
     const fullPath = path.join(dir, filename);
+    if (renderMod.isOwnOutput(fullPath)) return; // never re-export what this app just wrote
     if (existing.has(filename) && !watchPending.has(fullPath)) return;
     existing.add(filename);
     if (!fs.existsSync(fullPath)) return;

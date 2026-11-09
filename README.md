@@ -94,7 +94,7 @@ waveform, live input/output preview, test pattern generator and a full codec mat
 - **Test pattern generator** — verify your mapping on the real LED wall with slice names, grid
   and circles; use as reference, save as PNG or render to any codec.
 - **Watch folder** — drop renders in a folder and they're remapped automatically.
-- **GPU acceleration** (VideoToolbox on macOS) with automatic CPU fallback.
+- **Graphics card encoding** (VideoToolbox on macOS, Intel Quick Sync, NVIDIA NVENC or AMD AMF on Windows when they pass a short test encode), back to the processor when the encoder fails.
 - Native **ffmpeg** bundled for Intel Mac, Apple Silicon and Windows — no installation needed.
 
 ## Working with other media servers
@@ -162,11 +162,11 @@ Both do the same thing — remove the download block. You only need to do this o
 ## Quick workflow
 
 1. **Mapping page** — set your input canvas to the stageview resolution (e.g. `10400×416` for a
-   50×2 m P4.81 screen), add a screen (output) and create slices — or **Import XML** from
-   Resolume / **Import CSV** from Hippotizer.
+   50×2 m P4.81 screen), add a screen (output) and create slices — or **Mapping file** →
+   Import Resolume XML / Import Hippotizer CSV.
 2. Check the mapping with a **test pattern** on the actual LED wall.
-3. **Export page** — add your stageview footage, tweak transform/trim if needed, pick a codec
-   (DXV3 for Resolume, ProRes for quality, H.264 for PowerPoint/laptops) and hit **Start export**.
+3. **Export page** — add your stageview footage, tweak transform/trim if needed, choose where it
+   **Plays back on** and hit **Export** (the button shows how many clips, e.g. **Export 3 clips**).
 4. Play the exported file full-screen on the output — done.
 
 ## Run from source
@@ -174,9 +174,10 @@ Both do the same thing — remove the download block. You only need to do this o
 ```bash
 git clone https://github.com/MikeXtremeLED/xtremeled-remap-export.git
 cd xtremeled-remap-export
-npm install
+npm install        # use Node 22 (.nvmrc): on other versions Electron can install incompletely
+npm run fetch-ffmpeg   # Windows only, once: the pinned ffmpeg (SHA-256 checked, not in git)
 npm start          # run the app
-npm test           # geometry / XML / CSV / render test suite (45 checks with real ffmpeg renders)
+npm test           # geometry / XML / CSV / render test suite (real ffmpeg renders, pixel checks)
 ```
 
 ### Build installers
@@ -186,9 +187,12 @@ npm test           # geometry / XML / CSV / render test suite (45 checks with re
 npx electron-builder --mac --x64 --arm64
 
 # Windows (cross-build works from macOS/Linux)
-./tools/fetch-ffmpeg-win.sh     # one-time: downloads the Windows ffmpeg (149 MB, not in git)
+node tools/fetch-ffmpeg.js --platform=win32-x64   # one-time: the pinned ffmpeg, not in git
 npx electron-builder --win --x64
 ```
+
+Releases: bump `version` in package.json, commit, push a tag `vX.Y.Z`. GitHub Actions runs the
+tests on Windows and macOS and leaves unsigned installers in a **draft** release to publish by hand.
 
 ## Notes
 
@@ -208,4 +212,4 @@ If it saved you a media server rental (or just some stress on a show), you can
 
 Concept & field testing: **Mike — XtremeLED** ([xtremeled.nl](https://www.xtremeled.nl/)) ·
 Engineering: built with **Claude** (Anthropic) ·
-Rendering: [FFmpeg](https://ffmpeg.org/) (bundled builds by evermeet.cx, Martin Riedl and BtbN)
+Rendering: [FFmpeg](https://ffmpeg.org/) (bundled builds by gyan.dev, evermeet.cx and Martin Riedl)

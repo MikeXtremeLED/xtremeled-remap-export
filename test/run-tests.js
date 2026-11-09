@@ -447,12 +447,181 @@ fs.unlinkSync(outWav);
   assert(/prores/i.test(probeInfo(caps.proresPath, outGpu)));
   ok('GPU path renders ProRes (or falls back to CPU cleanly)');
 
+  // ---------- 21) honest results and pre-export checks ----------
+  console.log('Test 21: size rules per codec');
+  const fitOf = (id, w, h, o) => { const f = Codecs.fitOutputSize(id, w, h, o); return `${f.width}x${f.height}`; };
+  assert.strictEqual(fitOf('png', 321, 33), '321x33');
+  assert.strictEqual(fitOf('png_seq', 321, 33), '321x33');
+  assert.strictEqual(fitOf('prores_4444', 321, 33), '321x33');
+  assert.strictEqual(fitOf('dxv', 321, 33), '321x33');
+  assert.strictEqual(fitOf('prores_hq', 321, 33), '322x33', 'ProRes 4:2:2: only the width has to be even');
+  assert.strictEqual(fitOf('h264', 321, 33), '322x34');
+  assert.strictEqual(fitOf('hevc', 321, 33), '322x34');
+  assert.strictEqual(fitOf('prores_4444', 321, 33, { gpu: true }), '322x34', 'GPU encoders stay even');
+  assert.strictEqual(fitOf('hap_q', 3840, 1082), '3840x1084');
+  assert.strictEqual(Codecs.sizeProblem('hap_q', 3840, 1082).message, "HAP Q can't make 3840×1082: height must be divisible by 4");
+  assert.strictEqual(Codecs.sizeProblem('hap', 1922, 1082).message, "HAP Standard can't make 1922×1082: width and height must be divisible by 4");
+  assert(Codecs.sizeProblem('dxv_hq', 640, 62), 'DXV3 HQ is HAP Q underneath');
+  assert.strictEqual(Codecs.sizeProblem('hap_q', 1920, 1080), null);
+  assert.strictEqual(Codecs.sizeProblem('dxv', 640, 62), null);
+  assert.strictEqual(Codecs.sizeProblem('h264', 321, 33), null, 'even padding is automatic');
+  ok('size rules: exact where possible, padded only where needed');
+
+  assert.deepStrictEqual(Codecs.batchOutcome(3, 3, false), { state: 'ok', text: 'All 3 exported' });
+  assert.deepStrictEqual(Codecs.batchOutcome(1, 1, false), { state: 'ok', text: 'Exported' });
+  assert.deepStrictEqual(Codecs.batchOutcome(2, 3, false), { state: 'partial', text: '2 of 3 exported, 1 failed' });
+  assert.deepStrictEqual(Codecs.batchOutcome(0, 3, false), { state: 'fail', text: '0 of 3 exported' });
+  assert.strictEqual(Codecs.batchOutcome(1, 3, true).state, 'cancelled');
+  ok('end-of-batch summary tells the real outcome');
+
+  assert.strictEqual(render.isFramePattern('C:\\x\\clip%d.png'), true);
+  assert.strictEqual(render.isFramePattern('clip%05d.png'), true);
+  assert.strictEqual(render.isFramePattern('100%.png'), false);
+  assert.strictEqual(render.isFramePattern('a%20b.png'), false);
+  assert.strictEqual(render.isFramePattern('a%%d.png'), false);
+  assert.strictEqual(render.isFramePattern('a%d_%d.png'), false);
+  ok('frame-pattern test matches ffmpeg');
+
+  console.log('Test 22: plain error messages');
+  const { explainError, checkOutputDir } = require('../src/main/errors');
+  const ffErr = (tail) => new Error(`ffmpeg error (code 4294967294):\n${tail}`);
+  // Paths in the form of the platform the tests run on: the messages use the real path module
+  const onWindows = process.platform === 'win32';
+  const missingDir = onWindows ? 'Z:\\nope' : '/nope';
+  const ctx = { src: onWindows ? 'C:\\show\\stage.mp4' : '/show/stage.mp4', out: path.join(missingDir, 'stage_remap.mov') };
+  assert.strictEqual(explainError(ffErr('[out#0/mov @ 01] Error opening output Z:\\nope\\stage_remap.mov: No such file or directory\nError opening output files: No such file or directory'), ctx).message, `The output folder ${missingDir} does not exist or cannot be reached.`);
+  assert.strictEqual(explainError(ffErr('[in#0 @ 01] Error opening input: No such file or directory\nError opening input file C:\\show\\stage.mp4.'), ctx).message, 'The source file stage.mp4 is missing or cannot be reached.');
+  assert.strictEqual(explainError(ffErr('[out#0/mov @ 01] Error opening output Z:\\nope\\stage_remap.mov: Permission denied'), ctx).message, 'Could not write stage_remap.mov: the file is in use (for example by Resolume) or read-only.');
+  assert.strictEqual(explainError(ffErr('[in#0 @ 01] Error opening input: Permission denied'), ctx).message, 'Could not read the source file stage.mp4: it is in use or you have no permission.');
+  assert.strictEqual(explainError(ffErr('av_interleaved_write_frame(): No space left on device\nError writing trailer'), ctx).message, `The disk of the output folder ${missingDir} is full.`);
+  assert.strictEqual(explainError(ffErr('[mov @ 01] moov atom not found\nError opening input: Invalid data found when processing input'), ctx).message, 'The source file stage.mp4 is damaged, incomplete or not a video this app can read.');
+  assert.strictEqual(explainError(ffErr('[hap @ 01] Video size 322x33 is not multiple of 4.\nConversion failed!'), ctx).message, "The codec can't make 322×33: width and height must be divisible by 4.");
+  assert.strictEqual(explainError(ffErr('[vost @ 01] Some strange failure here\nConversion failed!'), ctx).message, 'Export failed: Some strange failure here');
+  assert.strictEqual(explainError(new Error('Source has no audio track'), ctx).message, 'Source has no audio track');
+  assert.strictEqual(explainError(new Error('Cancelled'), ctx).detail, null);
+  assert(explainError(ffErr('stderr text'), ctx).detail.includes('stderr text'), 'details keep the technical text');
+  ok('ffmpeg failures explained in plain language');
+
+  // A tiny project with an odd output, used by the real renders below
+  const oddProj = {
+    name: 'odd', input: { width: 640, height: 64 },
+    screens: [{ id: 'o', name: 'Odd', width: 321, height: 33 }],
+    slices: [{ id: 's1', name: 's', screenId: 'o', enabled: true, in: { x: 0, y: 0, w: 321, h: 33 }, out: { x: 0, y: 0, w: 321, h: 33 }, inOrient: 0, outOrient: 0, flip: 0, mask: null }],
+  };
+  const stillSrc = path.join(tmp, 'xre-test-odd-src.png');
+  spawnSync(caps.proresPath, ['-y', '-hide_banner', '-f', 'lavfi', '-i', 'testsrc2=size=640x64:rate=1', '-frames:v', '1', '-update', '1', stillSrc], { encoding: 'utf8', timeout: 60000 });
+  const workDir = fs.mkdtempSync(path.join(tmp, 'xre-honest-'));
+
+  console.log('Test 23: exact sizes in real renders');
+  const oddPng = path.join(workDir, 'odd.png');
+  b = render.buildArgs(oddProj, { src: stillSrc, isImage: true, outPath: oddPng, screen: oddProj.screens[0] }, { codec: 'png', depth: 8 }, null);
+  assert.strictEqual(b.paddedTo, null);
+  run = spawnSync(caps.proresPath, b.args, { encoding: 'utf8', timeout: 60000 });
+  assert.strictEqual(run.status, 0, (run.stderr || '').slice(-1000));
+  assert(/321x33/.test(probeInfo(caps.proresPath, oddPng)), 'PNG stays exactly 321x33');
+  const oddMov = path.join(workDir, 'odd.mov');
+  b = render.buildArgs(oddProj, { src: stillSrc, isImage: true, outPath: oddMov, screen: oddProj.screens[0] }, { codec: 'prores_hq', fps: 5, imageDuration: 1 }, null);
+  assert.strictEqual(b.paddedTo, '322×33');
+  run = spawnSync(caps.proresPath, b.args, { encoding: 'utf8', timeout: 60000 });
+  assert.strictEqual(run.status, 0, (run.stderr || '').slice(-1000));
+  assert(/322x33/.test(probeInfo(caps.proresPath, oddMov)), 'ProRes 4:2:2 gets one extra column only');
+  ok('PNG exact at 321x33, ProRes padded to 322x33 and reported');
+
+  // HAP: refused without consent, padded right/bottom with consent
+  const hapProj = JSON.parse(JSON.stringify(oddProj));
+  hapProj.screens[0].width = 320;
+  hapProj.screens[0].height = 30;
+  assert.throws(
+    () => render.buildArgs(hapProj, { src: stillSrc, isImage: true, outPath: path.join(workDir, 'h.mov'), screen: hapProj.screens[0] }, { codec: 'hap_q', fps: 5, imageDuration: 1 }, null),
+    /HAP Q can't make 320×30: height must be divisible by 4/
+  );
+  const hapOut = path.join(workDir, 'hap-pad.mov');
+  b = render.buildArgs(hapProj, { src: stillSrc, isImage: true, outPath: hapOut, allowPad: true, screen: hapProj.screens[0] }, { codec: 'hap_q', fps: 5, imageDuration: 1 }, null);
+  run = spawnSync(caps.hapPath, b.args, { encoding: 'utf8', timeout: 60000 });
+  assert.strictEqual(run.status, 0, (run.stderr || '').slice(-1000));
+  assert(/320x32/.test(probeInfo(caps.hapPath, hapOut)), 'HAP Q padded to 320x32');
+  ok('HAP Q refused without consent, padded to 320x32 with consent');
+
+  console.log('Test 24: PNG sequence of a clip with audio');
+  const avClip = path.join(workDir, 'av.mp4');
+  spawnSync(caps.proresPath, ['-y', '-hide_banner', '-f', 'lavfi', '-i', 'testsrc2=size=640x64:rate=25:duration=1', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', avClip], { encoding: 'utf8', timeout: 60000 });
+  const avSeqDir = path.join(workDir, 'show 100%_seq');
+  const seqResults = await render.startBatch(null, {
+    project: oddProj,
+    jobs: [{ src: avClip, isImage: false, outDir: avSeqDir, outPath: path.join(avSeqDir, 'frame_%05d.png'), screen: oddProj.screens[0] }],
+    codec: 'png_seq', alpha: 'none', depth: 8, fps: 25, imageDuration: 1,
+  });
+  assert(seqResults[0].ok, 'sequence into a folder with % works: ' + JSON.stringify(seqResults[0]));
+  const seqFiles = fs.readdirSync(avSeqDir);
+  const realPngs = seqFiles.filter((f) => fs.readFileSync(path.join(avSeqDir, f)).slice(1, 4).toString() === 'PNG');
+  assert.strictEqual(realPngs.length, seqFiles.length, `every file is a real PNG (${realPngs.length} of ${seqFiles.length})`);
+  assert(seqFiles.length >= 24 && seqFiles.length <= 26, `one file per frame, got ${seqFiles.length}`);
+  ok(`no fake PNGs: ${seqFiles.length} frames, all valid, folder name with %`);
+
+  console.log('Test 25: % in file names');
+  const pctSrc = path.join(workDir, 'clip%d.png');
+  fs.copyFileSync(stillSrc, pctSrc);
+  const pctOut = path.join(workDir, 'still_clip%d 100%.png');
+  const pctResults = await render.startBatch(null, {
+    project: oddProj,
+    jobs: [{ src: pctSrc, isImage: true, outPath: pctOut, screen: oddProj.screens[0] }],
+    codec: 'png', alpha: 'none', depth: 8, fps: 25, imageDuration: 1,
+  });
+  assert(pctResults[0].ok, JSON.stringify(pctResults[0]));
+  assert(fs.existsSync(pctOut), 'still written under the exact name');
+  ok('% in source and output names: exact name written');
+
+  console.log('Test 26: output folder and source problems');
+  assert.strictEqual(checkOutputDir(workDir), null);
+  assert.deepStrictEqual(fs.readdirSync(workDir).filter((f) => f.startsWith('.xre-write-test')), [], 'write test leaves nothing behind');
+  const goneDir = path.join(workDir, 'gone');
+  assert(/does not exist or cannot be reached/.test(checkOutputDir(goneDir).message));
+  const goneEvents = [];
+  const fakeWin = { isDestroyed: () => false, webContents: { send: (ch, ev) => goneEvents.push(ev) } };
+  const goneResults = await render.startBatch(fakeWin, {
+    project: oddProj,
+    jobs: [1, 2, 3].map((n) => ({ src: stillSrc, isImage: true, outPath: path.join(goneDir, `o${n}.png`), screen: oddProj.screens[0], label: `clip${n}` })),
+    codec: 'png', alpha: 'none', depth: 8, fps: 25, imageDuration: 1,
+  });
+  assert.strictEqual(goneResults.length, 3);
+  assert(goneResults.every((r) => !r.ok && /does not exist or cannot be reached/.test(r.error) && r.detail), JSON.stringify(goneResults));
+  const doneEv = goneEvents.find((e) => e.type === 'batch-done');
+  assert.strictEqual(doneEv.total, 3);
+  assert.strictEqual(goneEvents.filter((e) => e.type === 'job-error').length, 3);
+  ok('missing output folder: 3 plain failures, nothing rendered');
+
+  const missingSrc = await render.startBatch(null, {
+    project: oddProj,
+    jobs: [{ src: path.join(workDir, 'not-there.mp4'), isImage: false, outPath: path.join(workDir, 'x.mov'), screen: oddProj.screens[0] }],
+    codec: 'prores_hq', alpha: 'none', depth: 10, fps: 25, imageDuration: 1,
+  });
+  assert.strictEqual(missingSrc[0].error, 'The source file not-there.mp4 is missing or cannot be reached.');
+  assert(/No such file/.test(missingSrc[0].detail) && /Command: ffmpeg/.test(missingSrc[0].detail), 'details hold the full technical text');
+  ok('missing source explained, details kept');
+
+  require('./mapcheck-tests').run(ok);
+  require('./mapedit-tests').run(ok);
+  await require('./projectdoc-tests').run(ok, tmp);
+  await require('./pixel-tests').run(ok, caps.proresPath, tmp);
+  await require('./safe-export-tests').run(ok, caps.proresPath, tmp);
+  await require('./speed-tests').run(ok, caps.proresPath, tmp);
+  await require('./exportplan-tests').run(ok, caps.proresPath, tmp);
+  await require('./conform-tests').run(ok, caps.proresPath, tmp);
+  await require('./release-tests').run(ok, caps.proresPath, tmp);
+
+  fs.rmSync(workDir, { recursive: true, force: true });
+  try { fs.unlinkSync(stillSrc); } catch (e) { /* gone */ }
+
   [srcPng, srcVid, srcSq, outMov, outDxv, outHap, outHevc, outPng, outPng16, outTrim, outTr, outA, outB, outMerged, outGpu].forEach((f) => {
     try { fs.unlinkSync(f); } catch (e) { /* gone */ }
   });
   fs.rmSync(seqDir, { recursive: true, force: true });
 
   console.log(`\nALL ${passed} CHECKS PASSED`);
+  // The About card reads this: a build only shows a test result it really had
+  if (process.env.XRE_BUILD_INFO) {
+    fs.writeFileSync(path.join(__dirname, '..', process.env.XRE_BUILD_INFO), JSON.stringify({ testsPassed: passed, at: new Date().toISOString(), ffmpeg: caps.entries.find((e) => e.path === caps.proresPath).version }));
+  }
 })().catch((e) => {
   console.error('FAILED:', e);
   process.exit(1);

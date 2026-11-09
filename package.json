@@ -1,19 +1,24 @@
 {
   "name": "xtremeled-remap-export",
   "productName": "XtremeLED Remap Export",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Remap stageview renders naar LED output mappings (Resolume-compatible)",
   "author": "XtremeLED",
   "license": "UNLICENSED",
   "main": "main.js",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
+    "prestart": "node tools/check-install.js",
     "start": "electron .",
     "test": "node test/run-tests.js",
     "screenshot": "electron . --screenshot=/tmp/xre-screenshot.png",
-    "postinstall": "node tools/patch-electron-name.js"
+    "fetch-ffmpeg": "node tools/fetch-ffmpeg.js",
+    "postinstall": "node node_modules/electron/install.js && node tools/patch-electron-name.js && node tools/check-install.js"
   },
   "devDependencies": {
-    "electron": "^31.7.0",
+    "electron": "^43.8.7",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
@@ -31,6 +36,8 @@
       "!docs/**",
       "!dist/**",
       "!tools/**",
+      "!licenses/**",
+      "!.github/**",
       "!*.command",
       "!node_modules/ffmpeg-static/**",
       "!bin/**"
@@ -55,6 +62,10 @@
         {
           "from": "bin/ffmpeg-dxv/ffmpeg-arm64",
           "to": "bin/ffmpeg-dxv/ffmpeg-arm64"
+        },
+        {
+          "from": "licenses",
+          "to": "licenses"
         }
       ]
     },
@@ -72,6 +83,10 @@
         {
           "from": "bin/ffmpeg-dxv/ffmpeg-win64.exe",
           "to": "bin/ffmpeg-dxv/ffmpeg-win64.exe"
+        },
+        {
+          "from": "licenses",
+          "to": "licenses"
         }
       ]
     },
@@ -79,5 +94,10 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
+  },
+  "allowScripts": {
+    "electron@43.8.7": true,
+    "ffmpeg-static@5.3.0": true,
+    "electron-winstaller@5.4.0": true
   }
 }

@@ -1,0 +1,91 @@
+# Build installers from a version tag and put them in a DRAFT release.
+# Bump "version" in package.json, commit, then: git tag v1.2.3 && git push origin v1.2.3
+# The release stays a draft until someone publishes it on GitHub. Installers are unsigned.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            builder: --win --x64
+            artifacts: |
+              dist/*.exe
+          - name: macOS
+            os: macos-latest
+            builder: --mac --x64 --arm64
+            artifacts: |
+              dist/*.dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Tag must match package.json
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install or verify the pinned ffmpeg
+        run: npm run fetch-ffmpeg
+
+      - name: Run the tests
+        run: npm test
+        env:
+          XRE_BUILD_INFO: build-info.json
+
+      - name: Build installers
+        run: npx electron-builder ${{ matrix.builder }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.name }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    name: Create draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" installers/* \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

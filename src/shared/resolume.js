@@ -43,8 +43,79 @@
     return undefined;
   }
 
+  // The whole attribute set of a param, to compare value and default
+  function paramAttrs(parent, groupName, paramName) {
+    const groups = SXML.findAllDeep(parent, (e) => e.tag === 'Params' && e.attrs.name === groupName);
+    for (const g of groups) {
+      const p = g.children.find((c) => c.attrs.name === paramName);
+      if (p) return p.attrs;
+    }
+    return null;
+  }
+
+  function vertsOf(el) {
+    return el ? SXML.childrenByTag(el, 'v').map((v) => ({ x: parseFloat(v.attrs.x), y: parseFloat(v.attrs.y) })) : [];
+  }
+
+  // Exported grids and rects are rounded to whole pixels, so "the same" allows for that
+  const WARP_TOLERANCE = 1.01;
+  const near = (a, b) => Math.abs(a.x - b.x) <= WARP_TOLERANCE && Math.abs(a.y - b.y) <= WARP_TOLERANCE;
+
+  // A rect stored as anything but four corners of its own bounding box
+  function isSkewed(el, r) {
+    const vs = vertsOf(el);
+    if (vs.length !== 4) return true;
+    const corners = [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y }, { x: r.x + r.w, y: r.y + r.h }, { x: r.x, y: r.y + r.h }];
+    return !vs.every((v) => corners.some((c) => near(v, c)));
+  }
+
+  // Homography or bezier grid that moves anything away from the plain output rect
+  function isWarped(sl, outR) {
+    const warper = SXML.firstChild(sl, 'Warper');
+    if (!warper) return false;
+    const homography = SXML.firstChild(warper, 'Homography');
+    if (homography) {
+      const src = vertsOf(SXML.firstChild(homography, 'src'));
+      const dst = vertsOf(SXML.firstChild(homography, 'dst'));
+      if (src.length !== dst.length || !src.every((p, i) => near(p, dst[i]))) return true;
+    }
+    const bezier = SXML.firstChild(warper, 'BezierWarper');
+    if (bezier) {
+      const cols = parseInt(bezier.attrs.controlWidth, 10);
+      const rows = parseInt(bezier.attrs.controlHeight, 10);
+      const vs = vertsOf(SXML.firstChild(bezier, 'vertices'));
+      if (cols > 1 && rows > 1 && vs.length === cols * rows) {
+        for (let j = 0; j < rows; j++) {
+          for (let i = 0; i < cols; i++) {
+            const grid = { x: outR.x + (i * outR.w) / (cols - 1), y: outR.y + (j * outR.h) / (rows - 1) };
+            if (!near(vs[j * cols + i], grid)) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  function nameList(names) {
+    const shown = names.slice(0, 4).join(', ');
+    return names.length > 4 ? `${shown} and ${names.length - 4} more` : shown;
+  }
+
+  const countOf = (names) => `${names.length} slice${names.length === 1 ? '' : 's'}`;
+
+  function importWarnings(warped, skewed, invert) {
+    const warnings = [];
+    if (warped.length) warnings.push(`Warp ignored on ${countOf(warped)} (${nameList(warped)}): exported as a plain rectangle.`);
+    if (skewed.length) warnings.push(`Non-rectangular shape on ${countOf(skewed)} (${nameList(skewed)}): replaced by its bounding rectangle.`);
+    if (invert.length) warnings.push(`Input mask "Invert" differs from the default on ${countOf(invert)} (${nameList(invert)}): this setting is ignored, check the mask.`);
+    return warnings;
+  }
+
+  // Round the edges, not the sizes: rounding x and w apart makes neighbours overlap by 1 px
   function rnd(r) {
-    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
+    const x = Math.round(r.x);
+    const y = Math.round(r.y);
+    return { x, y, w: Math.round(r.x + r.w) - x, h: Math.round(r.y + r.h) - y };
   }
 
   function parseScreenSetup(xmlText) {
@@ -70,6 +141,7 @@
     const screens = [];
     let idc = 1;
     let scc = 1;
+    const warped = [], skewed = [], invert = [];
 
     for (const screenEl of screenEls) {
       const scName =
@@ -95,6 +167,9 @@
         const outR = bboxOf(outRectEl);
         if (!inR || !outR || inR.w <= 0 || inR.h <= 0) continue;
 
+        if (isWarped(sl, outR)) warped.push(nm);
+        if (isSkewed(inRectEl, inR) || isSkewed(outRectEl, outR)) skewed.push(nm);
+
         const inOrient = parseInt(inRectEl.attrs.orientation || '0', 10) || 0;
         const outOrient = parseInt(outRectEl.attrs.orientation || '0', 10) || 0;
         const flip = parseInt(paramValue(sl, 'Output', 'Flip') || '0', 10) || 0;
@@ -103,6 +178,8 @@
         const maskEl = SXML.firstChild(sl, 'SliceMask');
         if (maskEl) {
           const mEnabled = paramValue(maskEl, 'Input Mask', 'Enabled') !== '0';
+          const inv = paramAttrs(maskEl, 'Input Mask', 'Invert');
+          if (mEnabled && inv && inv.default != null && inv.value !== inv.default) invert.push(nm);
           const shape = SXML.firstChild(maskEl, 'ShapeObject');
           // prefer the contour points (supports polygons), fall back to the Rect
           let pts = null;
@@ -154,6 +231,7 @@
       input: { width: Math.round(input.width), height: Math.round(input.height) },
       screens,
       slices,
+      warnings: importWarnings(warped, skewed, invert),
     };
   }
 

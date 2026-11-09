@@ -1,0 +1,28 @@
+{
+  "version": "8.1.2",
+  "platforms": {
+    "win32-x64": {
+      "file": "ffmpeg-win64.exe",
+      "version": "8.1.2",
+      "sha256": "ad8f211bc894755e0061c55ab280ae00e8d3d4f15a8cc4372b24cfa247b5942e",
+      "source": "gyan.dev full build",
+      "archive": {
+        "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build.zip",
+        "sha256": "b8cdefab5f50590a076c27c2b56b0294a0e6154faded28ba1ba05ebc4f801f57",
+        "entry": "ffmpeg-8.1.2-full_build/bin/ffmpeg.exe"
+      }
+    },
+    "darwin-x64": {
+      "file": "ffmpeg-x64",
+      "version": "8.1.2",
+      "sha256": "60725ea0467ccaf900bf294d3567c302a802dc661f03bdde6aa7ecc9ccf05c4f",
+      "source": "evermeet.cx, kept in git"
+    },
+    "darwin-arm64": {
+      "file": "ffmpeg-arm64",
+      "version": "8.1.2",
+      "sha256": "eaf91238e104dd0e262bc6510e25061855cc99a6955a721b0ac99660d58c473d",
+      "source": "martin-riedl.de, kept in git"
+    }
+  }
+}
