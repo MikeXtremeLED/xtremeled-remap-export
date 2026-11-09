@@ -5,8 +5,29 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' file:; style-src 'self' 'unsafe-inline'" />
   <title>XtremeLED Remap Export</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="theme.css" />
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-new" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 12v6M9 15h6"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"/><path d="M3 19l3-9h16l-3 9a1 1 0 0 1-1 .7H4a1 1 0 0 1-1-.7z"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/></symbol>
+    <symbol id="i-saveas" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M7 21v-6h9v6"/><path d="M18.5 2.5a2 2 0 0 1 3 3L14 13l-4 1 1-4z"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-frame" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/><rect x="8" y="9" width="8" height="6" rx="1"/></symbol>
+    <symbol id="i-lines" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M7 4v16M7 12h13M15 7l5 5-5 5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="3"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  </svg>
   <header id="toolbar">
     <div class="brand">
       <span class="logo"><b class="x">X</b><span class="t">TREME</span><span class="led">L<span class="ebars"><i></i><i></i><i></i></span>D</span></span>
@@ -16,19 +37,19 @@
     <div class="proj-file" id="proj-file"><span class="fname" id="proj-name"></span><span class="dot hidden" id="proj-dot" title="Unsaved changes">•</span></div>
     <div class="tb-sep doc-sep"></div>
     <div class="tb-group" id="tb-editor-left">
-      <button id="btn-new" title="New project">New</button>
-      <button id="btn-open-proj" title="Open project (.xreproj)">Open…</button>
-      <button id="btn-save-proj">Save</button>
-      <button id="btn-save-as" title="Save the project under a new name">Save as…</button>
+      <button id="btn-new" class="ico" title="New project" aria-label="New"><svg class="i" aria-hidden="true"><use href="#i-new"/></svg></button>
+      <button id="btn-open-proj" class="ico" title="Open project (.xreproj)" aria-label="Open"><svg class="i" aria-hidden="true"><use href="#i-open"/></svg></button>
+      <button id="btn-save-proj" class="ico" aria-label="Save"><svg class="i" aria-hidden="true"><use href="#i-save"/></svg></button>
+      <button id="btn-save-as" class="ico" title="Save the project under a new name" aria-label="Save as"><svg class="i" aria-hidden="true"><use href="#i-saveas"/></svg></button>
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group">
-      <button id="btn-undo">↶</button>
-      <button id="btn-redo">↷</button>
+      <button id="btn-undo" class="ico" aria-label="Undo"><svg class="i" aria-hidden="true"><use href="#i-undo"/></svg></button>
+      <button id="btn-redo" class="ico" aria-label="Redo"><svg class="i" aria-hidden="true"><use href="#i-redo"/></svg></button>
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group tb-menu">
-      <button id="btn-mapping-file" title="Import or export Resolume XML and Hippotizer CSV">Mapping file ▾</button>
+      <button id="btn-mapping-file" class="ico-text" title="Import or export Resolume XML and Hippotizer CSV"><svg class="i" aria-hidden="true"><use href="#i-lines"/></svg><span>Mapping file ▾</span></button>
       <div id="mapping-file-menu" class="popup-menu hidden">
         <button id="btn-import-xml" title="Import Resolume Advanced Output XML">Import Resolume XML…</button>
         <button id="btn-import-csv" title="Import Green Hippo Hippotizer VideoMapper CSV">Import Hippotizer CSV…</button>
@@ -43,15 +64,15 @@
       <button id="tab-both" class="tab" title="Input and output together, one selection">Both</button>
     </div>
     <div class="tb-group zoom">
-      <button id="btn-zoom-out" title="Zoom out">−</button>
+      <button id="btn-zoom-out" class="ico" title="Zoom out" aria-label="Zoom out"><svg class="i" aria-hidden="true"><use href="#i-minus"/></svg></button>
       <span id="zoom-label">100%</span>
-      <button id="btn-zoom-in" title="Zoom in">+</button>
-      <button id="btn-zoom-fit" title="Zoom to fit">Fit</button>
-      <button id="btn-zoom-frame" title="Zoom to the selected slice (F)">Frame</button>
+      <button id="btn-zoom-in" class="ico" title="Zoom in" aria-label="Zoom in"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg></button>
+      <button id="btn-zoom-fit" class="ico" title="Zoom to fit" aria-label="Fit"><svg class="i" aria-hidden="true"><use href="#i-fit"/></svg></button>
+      <button id="btn-zoom-frame" class="ico" title="Zoom to the selected slice (F)" aria-label="Frame"><svg class="i" aria-hidden="true"><use href="#i-frame"/></svg></button>
     </div>
     <div class="spacer"></div>
     <div id="toast-anchor"><div id="saved-toast" class="saved-toast hidden" role="status"><span class="chk">✓</span><span id="saved-toast-text"></span></div></div>
-    <button id="btn-render" class="accent">Export</button>
+    <button id="btn-render" class="accent ico-text"><svg class="i" aria-hidden="true"><use href="#i-export"/></svg><span>Export</span></button>
     <button id="btn-back-editor" class="accent hidden">← Mapping</button>
   </header>
 
@@ -201,7 +222,7 @@
           <div class="row" id="mask-add-row"><button id="mask-add">Add mask</button></div>
           <div id="mask-body" class="hidden">
             <div class="row">
-              <button id="mask-edit" class="mask-edit">Edit points</button>
+              <button id="mask-edit" class="mask-edit" title="In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it">Edit points</button>
               <label class="mask-on" title="Switch the mask off. Its points are kept.">Enabled</label><input type="checkbox" id="mask-enabled" title="Switch the mask off. Its points are kept." />
             </div>
             <div class="row4">
@@ -210,7 +231,6 @@
               <label>W</label><input type="text" inputmode="text" id="mask-w" class="num" />
               <label>H</label><input type="text" inputmode="text" id="mask-h" class="num" />
             </div>
-            <div class="note">In edit mode: drag points · double-click an edge to add a point · right-click a point to remove it.</div>
             <div class="row"><button id="mask-reset">Reset mask to slice</button></div>
           </div>
         </div>
@@ -277,9 +297,9 @@
         <div id="rp-timeline">
           <div class="tl-row">
             <span id="tl-cur" class="tc">00:00:00.00</span>
-            <button id="rp-play" class="accent" title="Play / pause the preview (Space)">▶</button>
-            <button id="rp-mute" title="Preview sound on/off">🔇</button>
-            <button id="rp-refresh" title="Refresh preview frame">⟳</button>
+            <button id="rp-play" class="ico" title="Play / pause the preview (Space)" aria-label="Play or pause"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg></button>
+            <button id="rp-mute" class="ico" title="Preview sound on/off" aria-label="Preview sound"><svg class="i" aria-hidden="true"><use href="#i-mute"/></svg></button>
+            <button id="rp-refresh" class="ico" title="Refresh preview frame" aria-label="Refresh preview"><svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg></button>
             <input type="text" inputmode="text" id="tl-in-n" class="num tc-num" step="0.01" min="0" placeholder="in" title="In point (s) — type for precision" />
             <button id="rp-set-in" title="Set in point at playhead (I)">[</button>
             <div id="tl-track">
@@ -291,7 +311,7 @@
             </div>
             <button id="rp-set-out" title="Set out point at playhead (O)">]</button>
             <input type="text" inputmode="text" id="tl-out-n" class="num tc-num" step="0.01" min="0" placeholder="out" title="Out point (s) — type for precision" />
-            <button id="rp-clear-trim" title="Clear in/out points">✕</button>
+            <button id="rp-clear-trim" class="ico" title="Clear in/out points" aria-label="Clear in and out points"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></button>
             <span id="tl-len" class="tc dim">—</span>
           </div>
         </div>
@@ -306,9 +326,15 @@
           <div id="r-codec-note" class="note"></div>
         </div>
         <div class="section hidden" id="rp-pixel-check">
-          <div class="panel-title">Pixel check</div>
-          <div id="px-rows"></div>
-          <div id="px-note" class="px-note"></div>
+          <button id="px-summary" class="px-summary" aria-expanded="false" title="Show the details of the pixel check">
+            <span id="px-icon" class="px-icon"></span>
+            <span id="px-title"></span>
+            <span class="more">Details <span class="chev">▾</span></span>
+          </button>
+          <div id="px-details" class="hidden">
+            <div id="px-rows"></div>
+            <div id="px-note" class="px-note"></div>
+          </div>
         </div>
 
         <button class="acc-head" data-acc="clip" aria-expanded="false"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Clip transform</span><i class="acc-dot hidden" id="acc-dot-clip" title="This clip has changes here"></i></button>

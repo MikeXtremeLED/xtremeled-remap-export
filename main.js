@@ -103,7 +103,7 @@ function runE2E() {
     width: 1600,
     height: 1000,
     show: process.env.E2E_SHOW === '1',
-    backgroundColor: '#1d2022',
+    backgroundColor: '#121416',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -166,7 +166,7 @@ function shootTutorial() {
     width: 1600,
     height: 1000,
     show: false,
-    backgroundColor: '#1d2022',
+    backgroundColor: '#121416',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -444,7 +444,7 @@ function createWindow() {
     height: 980,
     minWidth: 1100,
     minHeight: 680,
-    backgroundColor: '#1d2022',
+    backgroundColor: '#121416',
     title: 'XtremeLED Remap Export',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

@@ -1,10 +1,10 @@
 :root {
-  --bg: #1d2022;
-  --panel: #26292b;
-  --panel2: #2c3033;
-  --border: #34383b;
-  --text: #cfd3d6;
-  --dim: #8b9195;
+  --bg: #121416;
+  --panel: #1f2325;
+  --panel2: #2a2f32;
+  --border: #2f3438;
+  --text: #dde1e4;
+  --dim: #929a9f;
   --accent: #f7941e;        /* XtremeLED orange */
   --accent-hi: #ffa940;
   --accent-dim: rgba(247, 148, 30, 0.14);

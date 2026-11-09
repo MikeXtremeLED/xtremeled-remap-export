@@ -34,6 +34,9 @@ let drag = null;
 let uidCounter = 1;
 const uid = () => 'sl' + uidCounter++ + '_' + Math.random().toString(36).slice(2, 7);
 
+const RULER = 20; // thickness of the pixel rulers on the work surface
+const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp', 'webp', 'gif'];
 // Footage can also be a format the browser can't show, as a reference image can't
 const FOOTAGE_IMAGE_EXTS = [...IMAGE_EXTS, 'exr', 'dpx'];
@@ -562,7 +565,7 @@ function fitView(v) {
 function frameRect(v, r) {
   const t = vt[v];
   const b = bandRect(v);
-  const margin = 16;
+  const margin = RULER + 12; // the slice stays clear of the rulers
   t.scale = Math.max(0.002, Math.min(8, Math.min((b.w - margin * 2) / r.w, (b.h - margin * 2) / r.h)));
   t.ox = b.x + (b.w - r.w * t.scale) / 2 - r.x * t.scale;
   t.oy = b.y + (b.h - r.h * t.scale) / 2 - r.y * t.scale;
@@ -602,10 +605,10 @@ function toWorld(px, py) {
 }
 
 function drawCheckerBg(g, cx, cy, cwid, chei) {
-  g.fillStyle = '#141617';
+  g.fillStyle = '#0d0f10';
   g.fillRect(cx, cy, cwid, chei);
   const cell = 14;
-  g.fillStyle = '#191c1d';
+  g.fillStyle = '#101214';
   for (let y = 0; y * cell < chei; y++) {
     for (let x = (y % 2); x * cell < cwid; x += 2) {
       g.fillRect(cx + x * cell, cy + y * cell, cell, cell);
@@ -654,10 +657,12 @@ function draw() {
   currentMapCheck();
   const { w: cw, h: ch } = cssSize();
   ctx.clearRect(0, 0, cw, ch);
-  ctx.fillStyle = '#202426';
+  ctx.fillStyle = '#121416';
   ctx.fillRect(0, 0, cw, ch);
   if (!bothView) {
     drawView();
+    drawFrameTag();
+    drawRulers(bandRect(view));
     return;
   }
   const active = view;
@@ -669,16 +674,103 @@ function draw() {
     ctx.rect(b.x, b.y, b.w, b.h);
     ctx.clip();
     drawView();
+    drawRulers(b);
     ctx.font = 'bold 10px -apple-system, "Segoe UI", sans-serif';
-    ctx.textAlign = 'left';
+    ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillStyle = v === active ? '#f7941e' : '#8b9195';
-    ctx.fillText(v === 'input' ? 'INPUT' : `OUTPUT · ${activeScreen().name}`, b.x + 8, b.y + 5);
+    ctx.fillText(v === 'input' ? 'INPUT' : `OUTPUT · ${activeScreen().name}`, b.x + b.w - 8, b.y + RULER + 5);
     ctx.restore();
   }
   view = active;
-  ctx.fillStyle = '#34383b';
+  ctx.fillStyle = '#2f3438';
   ctx.fillRect(0, bandRect('output').y, cw, 1);
+}
+
+// The output's name and size inside its own frame, when the frame is big enough to hold it
+function drawFrameTag() {
+  if (view !== 'output') return;
+  const t = vt.output;
+  const { w: W, h: H } = worldSize('output');
+  const scr = activeScreen();
+  if (W * t.scale < 190 || H * t.scale < 44) return;
+  const text = `${scr.name} · ${scr.width}×${scr.height}`;
+  ctx.font = '600 11px -apple-system, "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width;
+  const x = toScreenX(W) - tw - 26, y = toScreenY(H) - 30;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(x, y, tw + 14, 20);
+  ctx.fillStyle = '#cfd3d6';
+  ctx.fillText(text, x + 7, y + 10);
+}
+
+function rulerStep(minWorld) {
+  const base = Math.pow(10, Math.floor(Math.log10(minWorld)));
+  for (const m of [1, 2, 5]) if (m * base >= minWorld) return m * base;
+  return 10 * base;
+}
+
+// Pixel rulers along the top and left of a view; the selected slice is marked on both
+function drawRulers(b) {
+  const t = vt[view];
+  const s = selected();
+  const sel = s && visibleSlices(view).includes(s) ? sliceRect(s, view) : null;
+  const step = Math.max(1, rulerStep(80 / t.scale));
+  const minor = step / 5;
+  const font = '9px -apple-system, "Segoe UI", sans-serif';
+  const paint = (horiz) => {
+    const origin = horiz ? t.ox : t.oy;
+    const start = horiz ? b.x : b.y;
+    const end = start + (horiz ? b.w : b.h);
+    ctx.fillStyle = '#1a1d1f';
+    if (horiz) ctx.fillRect(b.x, b.y, b.w, RULER);
+    else ctx.fillRect(b.x, b.y, RULER, b.h);
+    if (sel) {
+      ctx.fillStyle = 'rgba(247,148,30,0.32)';
+      const a = origin + (horiz ? sel.x : sel.y) * t.scale;
+      const len = (horiz ? sel.w : sel.h) * t.scale;
+      if (horiz) ctx.fillRect(a, b.y, len, RULER);
+      else ctx.fillRect(b.x, a, RULER, len);
+    }
+    ctx.font = font;
+    ctx.lineWidth = 1;
+    const first = Math.floor((start - origin) / t.scale / step) * step;
+    for (let i = 0; ; i++) {
+      const p = first + i * minor;
+      const pos = Math.round(p * t.scale + origin) + 0.5;
+      if (pos > end) break;
+      const major = i % 5 === 0;
+      const reach = major ? 8 : 15;
+      ctx.strokeStyle = '#5a6267';
+      ctx.beginPath();
+      if (horiz) { ctx.moveTo(pos, b.y + reach); ctx.lineTo(pos, b.y + RULER); }
+      else { ctx.moveTo(b.x + reach, pos); ctx.lineTo(b.x + RULER, pos); }
+      ctx.stroke();
+      if (!major) continue;
+      ctx.fillStyle = '#9aa2a7';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      if (horiz) ctx.fillText(String(Math.round(p)), pos + 3, b.y + 9);
+      else {
+        ctx.save();
+        ctx.translate(b.x + 9, pos - 3);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText(String(Math.round(p)), 0, 0);
+        ctx.restore();
+      }
+    }
+  };
+  paint(true);
+  paint(false);
+  ctx.fillStyle = '#1a1d1f';
+  ctx.fillRect(b.x, b.y, RULER, RULER);
+  ctx.fillStyle = '#7f878c';
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('px', b.x + RULER / 2, b.y + RULER / 2);
 }
 
 // One view of the mapping, in the current `view`
@@ -712,7 +804,7 @@ function drawView() {
   }
   ctx.restore();
 
-  ctx.strokeStyle = '#42484c';
+  ctx.strokeStyle = '#4c5358';
   ctx.lineWidth = 1;
   ctx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
@@ -1890,7 +1982,7 @@ function splitSketchSvg(l, canvas, short) {
   const k = Math.min(VW / (x1 - x0), VH / (y1 - y0));
   const sx = (x) => (x - x0) * k + 1;
   const sy = (y) => (y - y0) * k + 1;
-  const parts = [`<rect x="${sx(0)}" y="${sy(0)}" width="${canvas.w * k}" height="${canvas.h * k}" fill="#141617" stroke="#42484c" />`];
+  const parts = [`<rect x="${sx(0)}" y="${sy(0)}" width="${canvas.w * k}" height="${canvas.h * k}" fill="#0d0f10" stroke="#4c5358" />`];
   const noun = l.quarter ? 'Column' : 'Row';
   const seamsFit = l.panelW && l.panelW * k >= 3;
   l.rects.forEach((r, i) => {
@@ -3022,7 +3114,7 @@ function drawRenderPreview() {
   const { w: W, h: H } = rpWorld();
 
   rpCtx.clearRect(0, 0, cw, ch);
-  rpCtx.fillStyle = '#202426';
+  rpCtx.fillStyle = '#121416';
   rpCtx.fillRect(0, 0, cw, ch);
 
   const cx = t.ox, cy = t.oy;
@@ -3056,7 +3148,7 @@ function drawRenderPreview() {
   }
   rpCtx.restore();
 
-  rpCtx.strokeStyle = '#42484c';
+  rpCtx.strokeStyle = '#4c5358';
   rpCtx.strokeRect(cx - 0.5, cy - 0.5, cwid + 1, chei + 1);
 
   if (rp.viewMode === 'input') {
@@ -3145,7 +3237,12 @@ function refreshFileList() {
     sz.dataset.len = String(i);
     fillRowLength(sz, f);
     const stretched = footageStretch(f);
-    row.append(cb, st, nm, sz);
+    const thumb = document.createElement('img');
+    thumb.className = 'thumb';
+    thumb.alt = '';
+    if (f.thumb && !f.missing) thumb.src = f.thumb;
+    f.thumbEl = thumb;
+    row.append(cb, st, thumb, nm, sz);
     if (f.sequence) {
       row.classList.add('seq');
       row.appendChild(sequenceRateLine(f));
@@ -3179,6 +3276,7 @@ function refreshFileList() {
     list.appendChild(row);
     if (stretched) list.appendChild(footageWarnRow(f, stretched));
   });
+  pumpThumbs();
   const missing = rp.files.filter((f) => f.missing).length;
   $('rp-missing-line').textContent = `${missing} file${missing === 1 ? '' : 's'} missing`;
   $('rp-missing-line').classList.toggle('hidden', !missing);
@@ -3189,6 +3287,40 @@ function refreshFileList() {
   const anyImage = rp.files.some((f) => f.isImage);
   const def = currentCodec();
   $('r-still-row').style.display = anyImage && !def.still && !def.audioOnly ? '' : 'none';
+}
+
+// Small preview per clip, made one at a time so a long batch doesn't stall the app
+let thumbsRunning = false;
+async function pumpThumbs() {
+  if (thumbsRunning) return;
+  thumbsRunning = true;
+  try {
+    for (;;) {
+      const f = rp.files.find((x) => !x.thumb && !x.thumbTried && !x.missing && x.probe);
+      if (!f) break;
+      f.thumbTried = true;
+      try {
+        const at = f.isImage ? 0 : Math.min(1, (fileDuration(f) || 0) / 2);
+        const url = await api.previewFrame(f.path, at, f.sequence);
+        const img = new Image();
+        await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = url; });
+        const c = document.createElement('canvas');
+        c.width = 92;
+        c.height = 52;
+        const g = c.getContext('2d');
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, c.width, c.height);
+        const k = Math.min(c.width / img.naturalWidth, c.height / img.naturalHeight);
+        const w = img.naturalWidth * k, h = img.naturalHeight * k;
+        g.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+        f.thumb = c.toDataURL('image/jpeg', 0.8);
+        if (f.thumbEl) f.thumbEl.src = f.thumb;
+      } catch (e) { /* the row keeps its empty thumbnail */ }
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  } finally {
+    thumbsRunning = false;
+  }
 }
 
 function rowName(f) {
@@ -3657,7 +3789,7 @@ let lastPlayDraw = 0;
 function updatePlayBtn() {
   const f = activeFile();
   const btn = $('rp-play');
-  btn.textContent = rp.playing ? '⏸' : '▶';
+  btn.innerHTML = icon(rp.playing ? 'pause' : 'play');
   btn.disabled = !f || f.isImage || !fileDuration(f);
 }
 
@@ -3729,7 +3861,7 @@ async function startPlayback() {
     // native, smooth playback (with audio) — interval instead of rAF so it also
     // runs when the window is hidden/minimized
     rpVideo.muted = rp.previewMuted !== false; // default muted: keeps the clock running
-    $('rp-mute').textContent = rpVideo.muted ? '🔇' : '🔊';
+    $('rp-mute').innerHTML = icon(rpVideo.muted ? 'mute' : 'sound');
     rpVideo.currentTime = startT;
     rpVideo.play().catch(() => {});
     // watchdog: if the clock doesn't advance (broken decoder), fall back to ffmpeg stepping
@@ -3753,7 +3885,7 @@ async function startPlayback() {
       } else if (performance.now() - lastChange > 1200 && !rpVideo.muted) {
         rpVideo.muted = true;
         rp.previewMuted = true;
-        $('rp-mute').textContent = '🔇';
+        $('rp-mute').innerHTML = icon('mute');
       }
       f.curTime = rpVideo.currentTime;
       const end = f.outSec != null ? f.outSec : fileDuration(f);
@@ -3855,6 +3987,9 @@ function refreshClipInfo() {
 const PX_CHECK_ICON = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M2.5 7.6l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const PX_WARN_ICON = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M7 2.2l5.2 9.4H1.8L7 2.2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 6v2.6M7 10.2v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
+let pxOpenChoice = null; // null: follows the check; otherwise what the user clicked
+let pxHadWarning = false;
+
 function refreshPixelCheck() {
   const card = $('rp-pixel-check');
   const f = activeFile();
@@ -3868,10 +4003,23 @@ function refreshPixelCheck() {
   const alpha = $('r-alpha').value !== 'none' && def.alpha.includes($('r-alpha').value);
   const plan = Codecs.pixelPlan(slices, f.probe, { alpha, transform: f.transform });
   const fps = outputRate() || (f.isImage ? clampInt($('r-fps').value, 1, 240) : f.probe.fps || 25);
-  $('px-rows').innerHTML = Codecs.pixelCheckRows(plan, def.id, fps, f.isImage)
+  const rows = Codecs.pixelCheckRows(plan, def.id, fps, f.isImage);
+  $('px-rows').innerHTML = rows
     .map((r) => `<div class="px-row${r.ok ? '' : ' warn'}">${r.ok ? PX_CHECK_ICON : PX_WARN_ICON}<span class="k">${r.key}</span><span class="v">${r.value}</span></div>`)
     .join('');
   $('px-note').textContent = Codecs.codecFidelityNote(def.id);
+  const warns = rows.filter((r) => !r.ok).length;
+  // Opens by itself as soon as something needs attention, whatever was chosen before
+  if ((warns > 0) !== pxHadWarning) {
+    pxHadWarning = warns > 0;
+    pxOpenChoice = null;
+  }
+  const open = pxOpenChoice === null ? warns > 0 : pxOpenChoice;
+  card.classList.toggle('warn', warns > 0);
+  $('px-icon').innerHTML = warns ? PX_WARN_ICON : PX_CHECK_ICON;
+  $('px-title').textContent = warns ? `Pixel check: ${warns} ${warns === 1 ? 'point' : 'points'} to review` : 'Pixel check: all clear';
+  $('px-details').classList.toggle('hidden', !open);
+  $('px-summary').setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 function scaleLinked(tr) {
@@ -6172,11 +6320,15 @@ function bindUI() {
     else drawRenderPreview();
   };
   $('rp-play').onclick = togglePlayback;
+  $('px-summary').onclick = () => {
+    pxOpenChoice = $('px-summary').getAttribute('aria-expanded') !== 'true';
+    refreshPixelCheck();
+  };
   $('rp-mute').onclick = () => {
     rp.previewMuted = rp.previewMuted === false; // toggle (default true)
     rp.previewMuted = !rpVideo.muted ? true : false;
     rpVideo.muted = rp.previewMuted;
-    $('rp-mute').textContent = rpVideo.muted ? '🔇' : '🔊';
+    $('rp-mute').innerHTML = icon(rpVideo.muted ? 'mute' : 'sound');
   };
   $('rp-refresh').onclick = () => { stopPlayback(false); fetchFrame(true); };
   $('rp-set-in').onclick = () => {
